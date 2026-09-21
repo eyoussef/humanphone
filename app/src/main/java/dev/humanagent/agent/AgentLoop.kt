@@ -7,6 +7,7 @@ import dev.humanagent.llm.LlmClient
 import dev.humanagent.llm.Message
 import dev.humanagent.llm.SettingsStore
 import dev.humanagent.llm.StreamEvent
+import dev.humanagent.util.Markdown
 import dev.humanagent.voice.Speaker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -195,6 +196,7 @@ class AgentLoop(
         append("- Use find_contact before call or send_sms when you only know a name.\n")
         append("- Use speak when the user should hear progress, and finish the moment the goal is met, blocked, or needs the user.\n")
         append("- If the user writes in another language, answer in that language.\n")
+        append("- Speak and write plain sentences: no markdown asterisks, hashes or bullet symbols.\n")
         if (settings.sendScreenshots) {
             append("- You also receive a screenshot of the screen every step; use it for images, games and canvas content.\n")
         }
@@ -234,7 +236,7 @@ class AgentLoop(
 
     /** Speaker calls belong on the main thread; the loop runs on a background dispatcher. */
     private fun say(text: String) {
-        mainHandler.post { runCatching { speaker.say(text) } }
+        mainHandler.post { runCatching { speaker.say(Markdown.strip(text)) } }
     }
 
     companion object {

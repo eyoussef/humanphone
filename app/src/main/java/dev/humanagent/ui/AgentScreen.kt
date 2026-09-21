@@ -181,7 +181,7 @@ fun AgentScreen(engineActive: Boolean) {
                     }
                     if (state.liveText.isNotBlank()) {
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
+                        MarkdownText(
                             text = state.liveText,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 8,
@@ -308,7 +308,7 @@ fun AgentScreen(engineActive: Boolean) {
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.secondary,
                     )
-                    Text(text = state.lastReply, style = MaterialTheme.typography.bodyMedium)
+                    MarkdownText(text = state.lastReply, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
@@ -387,7 +387,7 @@ private fun TraceRow(step: AgentStep, baseTimestamp: Long) {
                 )
             }
             if (step.detail.isNotBlank()) {
-                Text(
+                MarkdownText(
                     text = step.detail,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

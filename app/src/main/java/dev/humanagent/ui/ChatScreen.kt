@@ -23,14 +23,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -159,7 +159,7 @@ fun ChatScreen(
                 enabled = settings != null,
             ) {
                 Icon(
-                    imageVector = if (speakReplies) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,
+                    imageVector = if (speakReplies) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
                     contentDescription = if (speakReplies) "Spoken replies on" else "Spoken replies off",
                     tint = if (speaking) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -332,7 +332,7 @@ fun ChatScreen(
                 enabled = streaming || draft.isNotBlank(),
             ) {
                 Icon(
-                    imageVector = if (streaming) Icons.Filled.Close else Icons.Filled.Send,
+                    imageVector = if (streaming) Icons.Filled.Close else Icons.AutoMirrored.Filled.Send,
                     contentDescription = if (streaming) "Cancel the reply" else "Send",
                 )
             }
@@ -376,7 +376,7 @@ private fun MessageBubble(turn: ChatTurn) {
                     color = if (isUser) onContainer else MaterialTheme.colorScheme.secondary,
                 )
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
+                MarkdownText(
                     text = turn.text.ifBlank { "…" },
                     style = MaterialTheme.typography.bodyMedium,
                 )

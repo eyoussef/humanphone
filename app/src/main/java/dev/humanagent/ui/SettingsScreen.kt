@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,6 +36,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -145,6 +147,28 @@ fun SettingsScreen(settingsStore: SettingsStore) {
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
             refreshPermissions()
         }
+
+    /**
+     * Android 13+ greys out Accessibility and other special access for sideloaded apps until the
+     * user allows restricted settings from the app's info page; this opens that page. It is also
+     * the only way back once a runtime permission has been denied twice.
+     */
+    fun openAppInfo() {
+        systemSettingsLauncher.launch(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null),
+            ),
+        )
+    }
+
+    fun openAppNotificationSettings() {
+        systemSettingsLauncher.launch(
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
+        )
+    }
+
     LaunchedEffect(Unit) { refreshPermissions() }
 
     Column(
@@ -302,6 +326,24 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             )
         }
 
+        SectionCard(title = "Trouble enabling a permission?") {
+            Text(
+                text = "1. Android hides special access such as Accessibility for apps installed outside a store.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = "2. Tap Open app info, then the ⋮ menu at the top right, then Allow restricted settings.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = "3. Come back here and turn the permission on again.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = { openAppInfo() }) {
+                Text(text = "Open app info")
+            }
+        }
+
         SectionCard(title = "Permissions") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -334,6 +376,13 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                 onAction = {
                     systemSettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 },
+                warning = if (accessibilityOn && !accessibilityConnected) {
+                    "Enabled but not connected — turn it off and on again, or reopen the app."
+                } else {
+                    null
+                },
+                secondaryActionLabel = "App info",
+                onSecondaryAction = { openAppInfo() },
             )
             PermissionRow(
                 title = "Display over other apps",
@@ -363,36 +412,45 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                 detail = "Shows the foreground-service status while the agent works.",
                 granted = notificationsOn,
                 actionLabel = "Allow",
-                actionEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationsOn,
+                actionEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+                actionVisible = !notificationsOn,
                 onAction = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         runtimePermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
                 },
+                secondaryActionLabel = "App info",
+                onSecondaryAction = { openAppNotificationSettings() },
             )
             PermissionRow(
                 title = "Microphone",
                 detail = "Dictate chat messages and agent commands.",
                 granted = micOn,
                 actionLabel = "Allow",
-                actionEnabled = !micOn,
+                actionVisible = !micOn,
                 onAction = { runtimePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                secondaryActionLabel = "App info",
+                onSecondaryAction = { openAppInfo() },
             )
             PermissionRow(
                 title = "Send SMS",
                 detail = "Lets the assistant send a text message when you ask it to.",
                 granted = smsOn,
                 actionLabel = "Allow",
-                actionEnabled = !smsOn,
+                actionVisible = !smsOn,
                 onAction = { runtimePermissionLauncher.launch(Manifest.permission.SEND_SMS) },
+                secondaryActionLabel = "App info",
+                onSecondaryAction = { openAppInfo() },
             )
             PermissionRow(
                 title = "Contacts",
                 detail = "Lets the assistant look a contact up by name.",
                 granted = contactsOn,
                 actionLabel = "Allow",
-                actionEnabled = !contactsOn,
+                actionVisible = !contactsOn,
                 onAction = { runtimePermissionLauncher.launch(Manifest.permission.READ_CONTACTS) },
+                secondaryActionLabel = "App info",
+                onSecondaryAction = { openAppInfo() },
             )
         }
     }
@@ -480,6 +538,10 @@ private fun PermissionRow(
     granted: Boolean,
     actionLabel: String,
     actionEnabled: Boolean = true,
+    actionVisible: Boolean = true,
+    warning: String? = null,
+    secondaryActionLabel: String? = null,
+    onSecondaryAction: (() -> Unit)? = null,
     onAction: () -> Unit,
 ) {
     Row(
@@ -498,10 +560,43 @@ private fun PermissionRow(
                 style = MaterialTheme.typography.labelMedium,
                 color = if (granted) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
             )
+            if (warning != null) {
+                Text(
+                    text = warning,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
-        Spacer(modifier = Modifier.width(8.dp))
-        Button(onClick = onAction, enabled = actionEnabled) {
-            Text(text = actionLabel)
+        if (actionVisible) {
+            Spacer(modifier = Modifier.width(8.dp))
+            val secondaryLabel = secondaryActionLabel
+            val secondaryAction = onSecondaryAction
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (secondaryLabel != null && secondaryAction != null) {
+                    // Two actions must fit next to each other, so both go compact.
+                    Button(
+                        onClick = onAction,
+                        enabled = actionEnabled,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(text = actionLabel)
+                    }
+                    OutlinedButton(
+                        onClick = secondaryAction,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(text = secondaryLabel)
+                    }
+                } else {
+                    Button(onClick = onAction, enabled = actionEnabled) {
+                        Text(text = actionLabel)
+                    }
+                }
+            }
         }
     }
 }

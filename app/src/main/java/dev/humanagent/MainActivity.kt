@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.Icon
@@ -124,7 +124,7 @@ private fun BottomBar(selected: Int, onSelect: (Int) -> Unit) {
         NavigationBarItem(
             selected = selected == TAB_CHAT,
             onClick = { onSelect(TAB_CHAT) },
-            icon = { Icon(imageVector = Icons.Filled.Chat, contentDescription = null) },
+            icon = { Icon(imageVector = Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
             label = { Text(text = "Chat") },
         )
         NavigationBarItem(

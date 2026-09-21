@@ -16,6 +16,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dev.humanagent.HumanPhoneApp
 import dev.humanagent.MainActivity
+import dev.humanagent.util.Markdown
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -56,11 +57,13 @@ class AgentService : Service() {
                 _running.value = state.running
                 bubble?.setLabel(if (state.running) "•••" else "HP")
                 notifyStatus(
-                    when {
-                        state.error != null -> state.error
-                        state.running -> state.liveText.ifBlank { "Working…" }
-                        else -> state.lastReply.ifBlank { "Ready when you are." }
-                    }
+                    Markdown.singleLine(
+                        when {
+                            state.error != null -> state.error
+                            state.running -> state.liveText.ifBlank { "Working…" }
+                            else -> state.lastReply.ifBlank { "Ready when you are." }
+                        }
+                    )
                 )
             }
         }

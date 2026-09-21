@@ -9,6 +9,7 @@ import dev.humanagent.llm.LlmClient
 import dev.humanagent.llm.Message
 import dev.humanagent.llm.SettingsStore
 import dev.humanagent.llm.StreamEvent
+import dev.humanagent.util.Markdown
 import dev.humanagent.voice.Speaker
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -154,7 +155,9 @@ class ChatEngine(
         when {
             answer != null -> {
                 replaceLast(answer)
-                if (settings.speakReplies) mainHandler.post { runCatching { speaker.say(answer) } }
+                if (settings.speakReplies) {
+                    mainHandler.post { runCatching { speaker.say(Markdown.strip(answer)) } }
+                }
             }
 
             failure != null -> {
@@ -189,6 +192,7 @@ class ChatEngine(
         append("- The user triggers that by starting a message with \"$DO_PREFIX\" followed by the task; ")
         append("when they ask for an action without it, answer and remind them of the \"$DO_PREFIX\" shortcut once.\n")
         append("- Keep replies short, warm and spoken-friendly: they may be read out loud.\n")
+        append("- Write plain conversational text: never use markdown asterisks, hashes, tables or bullet symbols.\n")
         val notes = memory.snapshot()
         if (notes.isNotEmpty()) {
             append("\nWhat you remember about this user:\n")
