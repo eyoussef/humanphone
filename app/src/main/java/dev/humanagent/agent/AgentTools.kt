@@ -197,6 +197,46 @@ class AgentTools(
                 parameters = schema(listOf("summary"), "summary" to stringProp("what happened, in one or two sentences")),
             )
         )
+        add(
+            ToolSpec(
+                name = "web_search",
+                description = "Search the web and open the results in the browser. Use when you need to find pages or answers; read the screen afterwards to pick a result.",
+                parameters = schema(
+                    listOf("query"),
+                    "query" to stringProp("what to search for"),
+                    "engine" to stringProp("search engine to use", listOf("duckduckgo", "google")),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "fetch_page",
+                description = "Download a web page and return its readable text without opening the browser. Use to read an article or check a page's contents directly.",
+                parameters = schema(
+                    listOf("url"),
+                    "url" to stringProp("web address to read"),
+                    "max_chars" to intProp("optional maximum characters of text to return"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "submit",
+                description = "Press enter in the focused text field, or tap a Search/Go/Send/Enter button when the keyboard is hidden. Use right after typing a query or a form entry.",
+                parameters = schema(),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "wait_for_text",
+                description = "Wait until some text appears on screen, for up to 30 seconds. Use after opening a page or submitting a search instead of guessing how long it takes to load.",
+                parameters = schema(
+                    listOf("text"),
+                    "text" to stringProp("text expected to appear"),
+                    "seconds" to intProp("optional seconds to wait, default 5"),
+                ),
+            )
+        )
     }
 
     suspend fun execute(
@@ -266,6 +306,22 @@ class AgentTools(
                     ToolOutcome("Waited $seconds seconds.")
                 }
                 "finish" -> ToolOutcome(requireString(args, "summary"), terminal = true, includeScreen = false)
+                "web_search" -> ToolOutcome(
+                    executor.webSearch(requireString(args, "query"), JsonArgs.string(args, "engine")),
+                    includeScreen = true,
+                )
+                "fetch_page" -> ToolOutcome(
+                    executor.fetchPage(requireString(args, "url"), JsonArgs.int(args, "max_chars") ?: 6000),
+                    includeScreen = false,
+                )
+                "submit" -> ToolOutcome(executor.submitFocused(), includeScreen = true)
+                "wait_for_text" -> ToolOutcome(
+                    executor.waitForText(
+                        requireString(args, "text"),
+                        (JsonArgs.int(args, "seconds") ?: 5).coerceIn(1, 30) * 1000L,
+                    ),
+                    includeScreen = true,
+                )
                 else -> ToolOutcome(
                     "There is no tool called \"${call.name}\". Available tools: " +
                         specs.joinToString(", ") { it.name },

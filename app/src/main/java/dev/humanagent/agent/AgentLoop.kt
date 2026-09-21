@@ -100,6 +100,7 @@ class AgentLoop(
 
         var stepIndex = 0
         var answered = false
+        var nudges = 0
         while (stepIndex < settings.maxSteps && currentCoroutineContext().isActive) {
             stepIndex++
             val snapshot = reader.snapshot()
@@ -122,6 +123,18 @@ class AgentLoop(
             conversation += assistant
 
             if (assistant.toolCalls.isEmpty()) {
+                if (nudges < MAX_NUDGES) {
+                    // A model that answers with advice instead of acting gets pushed back to work.
+                    nudges++
+                    val nudge = "Do not answer with words. Act on the phone now: call a tool " +
+                        "(web_search, fetch_page, open_url, open_app, tap, tap_text, type_text, scroll, submit, " +
+                        "wait_for_text, navigate, send_sms, call, set_alarm, remember, speak) or call finish " +
+                        "with the summary once the task is really done."
+                    conversation += Message.user(nudge)
+                    step("nudge", "Keep going", "The model answered without acting; told it to use a tool.")
+                    delay(settings.stepDelayMs.coerceAtLeast(0).toLong())
+                    continue
+                }
                 val reply = assistant.content.ifBlank { "I stopped without a result." }
                 step("reply", "Assistant", reply)
                 if (settings.speakReplies) say(reply)
@@ -188,15 +201,22 @@ class AgentLoop(
 
     private fun buildSystemPrompt(settings: AppSettings): String = buildString {
         append(settings.persona)
-        append("\n\nYou are now driving this Android phone for real, through the accessibility service.\n")
+        append("\n\nYou are driving this Android phone for real, through the accessibility service. ")
+        append("You are the hands of this phone, not a chat partner: words never finish a task, only tool calls do. ")
+        append("Never reply with advice or an explanation of what you would do — do it, then look at the result.\n")
         append("How you work:\n")
-        append("- The latest screen dump is given to you at every step, with an index for each element.\n")
+        append("- Every tool result is followed by the current screen dump, with an index for each element.\n")
         append("- Use those indices or the visible wording to act; never invent elements.\n")
+        append("- Web work: web_search to search, fetch_page to read a page's text without leaving the app, ")
+        append("open_url to show a page to the user. Inside a browser, read_screen then tap_text/tap/scroll to move around.\n")
+        append("- After typing into a field, call submit to press enter or tap_text the button itself.\n")
+        append("- After an action that loads something, use wait_for_text instead of guessing.\n")
         append("- Take one or two actions, then look at the screen again before the next move.\n")
         append("- Use find_contact before call or send_sms when you only know a name.\n")
         append("- Use speak when the user should hear progress, and finish the moment the goal is met, blocked, or needs the user.\n")
-        append("- If the user writes in another language, answer in that language.\n")
-        append("- Speak and write plain sentences: no markdown asterisks, hashes or bullet symbols.\n")
+        append("- Never end a turn with plain prose: either call a tool or call finish with the summary.\n")
+        append("- If the user writes in another language, answer in that language, and speak plain sentences: ")
+        append("no markdown asterisks, hashes or bullet symbols.\n")
         if (settings.sendScreenshots) {
             append("- You also receive a screenshot of the screen every step; use it for images, games and canvas content.\n")
         }
@@ -241,6 +261,7 @@ class AgentLoop(
 
     companion object {
         private const val TAG = "HumanPhoneAgent"
+        private const val MAX_NUDGES = 3
         private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     }
 }

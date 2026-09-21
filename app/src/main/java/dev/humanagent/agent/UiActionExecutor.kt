@@ -15,7 +15,15 @@ import android.provider.Settings
 import android.telephony.SmsManager
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.content.ContextCompat
+import dev.humanagent.llm.LlmClient
+import dev.humanagent.util.HtmlText
+import java.net.URLEncoder
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import okhttp3.Request
 
 data class AppEntry(val label: String, val packageName: String)
 
@@ -147,6 +155,102 @@ class UiActionExecutor(
         return if (start(intent)) "Opened $normalized." else "No app can open $normalized."
     }
 
+    /** Opens a browser tab with search results, so the model can then read the live screen. */
+    suspend fun webSearch(query: String, engine: String?): String {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return "There is nothing to search for."
+        val encoded = runCatching { URLEncoder.encode(trimmed, "UTF-8") }.getOrDefault(trimmed)
+        val prefix = when (engine?.trim()?.lowercase()) {
+            "google" -> "https://www.google.com/search?q="
+            else -> "https://duckduckgo.com/?q="
+        }
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(prefix + encoded))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return if (start(intent)) {
+            "Opened search results for \"$trimmed\" in the browser."
+        } else {
+            "No browser would open the search results for \"$trimmed\"."
+        }
+    }
+
+    /** Fetches a page over HTTP and returns its readable text without any browser round-trip. */
+    suspend fun fetchPage(url: String, maxChars: Int): String = withContext(Dispatchers.IO) {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) {
+            "No web address was given."
+        } else {
+            val target = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+                trimmed
+            } else {
+                "https://$trimmed"
+            }
+            val limit = maxChars.coerceIn(1000, 12000)
+            try {
+                val request = Request.Builder()
+                    .url(target)
+                    .header("User-Agent", DESKTOP_USER_AGENT)
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .get()
+                    .build()
+                LlmClient.sharedClient.newCall(request).execute().use { response ->
+                    when {
+                        !response.isSuccessful ->
+                            "Could not fetch $target: the server answered HTTP ${response.code}."
+                        response.body == null ->
+                            "Could not fetch $target: the page sent no content."
+                        else -> {
+                            val html = runCatching { response.peekBody(MAX_PAGE_BYTES).string() }.getOrNull()
+                            if (html.isNullOrBlank()) {
+                                "Could not fetch $target: the page sent no readable content."
+                            } else {
+                                val title = HtmlText.titleOf(html)
+                                val header = if (title.isBlank()) "Title: (untitled)" else "Title: $title"
+                                "$header\n${HtmlText.toText(html, limit)}"
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                "Could not fetch $target: ${e.javaClass.simpleName}: ${e.message ?: "the request failed"}."
+            }
+        }
+    }
+
+    /** Presses enter on the focused field, or taps the most likely search/send button instead. */
+    suspend fun submitFocused(): String {
+        val field = reader.focusedEditable()
+        if (field != null) {
+            val entered = runCatching {
+                field.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+            }.getOrDefault(false)
+            if (entered) return "Pressed enter in ${describe(field)}."
+        }
+        for (label in listOf("Search", "Go", "Send", "Enter")) {
+            val button = reader.findByText(label)
+            if (button != null) return tapNode(button)
+        }
+        return "No enter key or submit button is on this screen."
+    }
+
+    /** Polls the screen until [query] shows up, so the model never has to guess a fixed delay. */
+    suspend fun waitForText(query: String, timeoutMs: Long): String {
+        val needle = query.trim()
+        if (needle.isEmpty()) return "Nothing to wait for."
+        val budget = timeoutMs.coerceIn(500L, 30_000L)
+        val startedAt = System.currentTimeMillis()
+        var waited = 0L
+        while (true) {
+            if (reader.findByText(needle) != null) {
+                return "\"$needle\" appeared after ${seconds(waited)} seconds."
+            }
+            waited = System.currentTimeMillis() - startedAt
+            if (waited >= budget) break
+            delay((budget - waited).coerceAtMost(POLL_MS))
+        }
+        val preview = reader.snapshot().rendered.lineSequence().take(2).joinToString("\n")
+        return "\"$needle\" did not appear within ${seconds(budget)} seconds; the screen still shows: $preview"
+    }
+
     fun dial(number: String): String {
         val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(number)}"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -261,6 +365,8 @@ class UiActionExecutor(
         }
     }
 
+    private fun seconds(millis: Long): String = "%.1f".format(Locale.US, millis / 1000.0)
+
     private fun describe(node: AccessibilityNodeInfo): String {
         val text = runCatching { node.text?.toString().orEmpty() }.getOrDefault("")
         val description = runCatching { node.contentDescription?.toString().orEmpty() }.getOrDefault("")
@@ -283,4 +389,11 @@ class UiActionExecutor(
         } else {
             SmsManager.getDefault()
         }
+
+    private companion object {
+        const val POLL_MS = 500L
+        const val MAX_PAGE_BYTES = 800_000L
+        const val DESKTOP_USER_AGENT =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    }
 }

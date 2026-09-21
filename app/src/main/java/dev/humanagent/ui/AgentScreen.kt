@@ -203,7 +203,7 @@ fun AgentScreen(engineActive: Boolean) {
                 onValueChange = { command = it },
                 modifier = Modifier.weight(1f),
                 label = { Text("Command") },
-                placeholder = { Text("e.g. Text Alex that I am running late") },
+                placeholder = { Text("e.g. search the web for iPhone 17 prices, or text Alex I am late") },
                 maxLines = 3,
                 supportingText = {
                     if (listening) {

@@ -9,6 +9,8 @@ import dev.humanagent.llm.LlmClient
 import dev.humanagent.llm.Message
 import dev.humanagent.llm.SettingsStore
 import dev.humanagent.llm.StreamEvent
+import dev.humanagent.llm.ToolSpec
+import dev.humanagent.util.JsonArgs
 import dev.humanagent.util.Markdown
 import dev.humanagent.voice.Speaker
 import java.io.File
@@ -21,6 +23,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * The talking half of the assistant: streaming chat with memory, plus the bridge that hands a
@@ -131,9 +138,10 @@ class ChatEngine(
         val builder = StringBuilder()
         var finalText: String? = null
         var failure: String? = null
+        var handoff: String? = null
 
         try {
-            LlmClient(config).stream(history(settings)).collect { event ->
+            LlmClient(config).stream(history(settings), listOf(phoneTool)).collect { event ->
                 when (event) {
                     is StreamEvent.TextDelta -> {
                         builder.append(event.text)
@@ -141,7 +149,14 @@ class ChatEngine(
                     }
 
                     is StreamEvent.Completed -> {
-                        finalText = event.message.content.ifBlank { builder.toString() }
+                        val call = event.message.toolCalls.firstOrNull { it.name == PHONE_TOOL }
+                        if (call != null) {
+                            handoff = JsonArgs.string(call.arguments, "task")
+                                ?: JsonArgs.string(call.arguments, "request")
+                            finalText = event.message.content.takeIf { it.isNotBlank() }
+                        } else {
+                            finalText = event.message.content.ifBlank { builder.toString() }
+                        }
                     }
 
                     is StreamEvent.Failure -> failure = event.message
@@ -149,6 +164,20 @@ class ChatEngine(
             }
         } finally {
             _streaming.value = false
+        }
+
+        val task = handoff
+        if (task != null && task.isNotBlank()) {
+            // The model decided this needs the phone, so the chat hands it to the operator loop.
+            val preamble = finalText?.takeIf { it.isNotBlank() }
+                ?: "On it — taking over the phone now. Watch the dot (or the Run tab) for each step."
+            replaceLast(preamble)
+            persist()
+            if (settings.speakReplies) {
+                mainHandler.post { runCatching { speaker.say(Markdown.strip(preamble)) } }
+            }
+            AgentService.run(context, task)
+            return
         }
 
         val answer = finalText?.takeIf { it.isNotBlank() }
@@ -191,6 +220,9 @@ class ChatEngine(
         append("- You can operate the phone: reading the screen, tapping, typing, scrolling, opening apps, sending SMS.\n")
         append("- The user triggers that by starting a message with \"$DO_PREFIX\" followed by the task; ")
         append("when they ask for an action without it, answer and remind them of the \"$DO_PREFIX\" shortcut once.\n")
+        append("- When the user asks you to do something on this phone — open an app, search or read the web, ")
+        append("send a message, set an alarm, change a setting — call the $PHONE_TOOL tool with the whole task ")
+        append("instead of describing the steps. Answer in words only for things you can answer yourself.\n")
         append("- Keep replies short, warm and spoken-friendly: they may be read out loud.\n")
         append("- Write plain conversational text: never use markdown asterisks, hashes, tables or bullet symbols.\n")
         val notes = memory.snapshot()
@@ -230,8 +262,30 @@ class ChatEngine(
 
     companion object {
         const val DO_PREFIX = "/do"
+        private const val PHONE_TOOL = "operate_phone"
         private const val ROLE_USER = "user"
         private const val ROLE_ASSISTANT = "assistant"
         private const val HISTORY_TURNS = 24
+
+        /**
+         * The one tool the chat half owns: when the model calls it, the words stop and the operator
+         * loop takes the phone over. This is what keeps the assistant from merely explaining steps.
+         */
+        private val phoneTool = ToolSpec(
+            name = PHONE_TOOL,
+            description = "Take over this phone and do the task for real: open apps, search the web, read a page, " +
+                "tap, type, scroll, send a message, set an alarm. Call it whenever the user asks for something " +
+                "to be done on the phone instead of explaining how they could do it themselves.",
+            parameters = buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("task") {
+                        put("type", "string")
+                        put("description", "The task to carry out on the phone, stated plainly and completely.")
+                    }
+                }
+                putJsonArray("required") { add("task") }
+            },
+        )
     }
 }
