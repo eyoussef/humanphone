@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HumanPhone</string>
+    <string name="accessibility_label">HumanPhone operator</string>
+    <string name="accessibility_description">Lets HumanPhone read the screen and tap, type, scroll and navigate apps on your behalf, exactly like a person using the phone.</string>
+    <string name="channel_agent_name">Assistant</string>
+    <string name="channel_agent_description">Shows the assistant bubble and the running task status.</string>
+</resources>
