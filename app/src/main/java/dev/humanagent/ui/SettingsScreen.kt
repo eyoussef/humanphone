@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -52,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import dev.humanagent.agent.AgentAccessibilityService
 import dev.humanagent.agent.AgentService
 import dev.humanagent.llm.AppSettings
@@ -115,6 +117,7 @@ fun SettingsScreen(settingsStore: SettingsStore) {
     val agentRunning by AgentService.isRunning.collectAsState()
 
     var accessibilityOn by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var accessibilityConnected by remember { mutableStateOf(AgentAccessibilityService.isConnected()) }
     var overlayOn by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var batteryOn by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
     var notificationsOn by remember { mutableStateOf(areNotificationsAllowed(context)) }
@@ -124,6 +127,7 @@ fun SettingsScreen(settingsStore: SettingsStore) {
 
     fun refreshPermissions() {
         accessibilityOn = isAccessibilityServiceEnabled(context)
+        accessibilityConnected = AgentAccessibilityService.isConnected()
         overlayOn = Settings.canDrawOverlays(context)
         batteryOn = isIgnoringBatteryOptimizations(context)
         notificationsOn = areNotificationsAllowed(context)
@@ -303,11 +307,21 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "Agent service: ${if (agentRunning) "running" else "stopped"}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Agent service: ${if (agentRunning) "running" else "stopped"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = when {
+                            !accessibilityOn -> "Accessibility service: disabled"
+                            accessibilityConnected -> "Accessibility service: connected"
+                            else -> "Accessibility service: enabled, waiting to connect"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 IconButton(onClick = { refreshPermissions() }) {
                     Icon(imageVector = Icons.Filled.Refresh, contentDescription = "Re-check permissions")
                 }

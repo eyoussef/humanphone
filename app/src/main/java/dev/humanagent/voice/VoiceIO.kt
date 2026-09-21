@@ -356,7 +356,7 @@ class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
         val active = engine ?: return
         val utterance = if (text.length > maxUtteranceChars) text.take(maxUtteranceChars) else text
         val result = try {
-            active.speak(utterance, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
+            active.speak(utterance, TextToSpeech.QUEUE_FLUSH, Bundle(), UTTERANCE_ID)
         } catch (e: IllegalStateException) {
             TextToSpeech.ERROR
         }

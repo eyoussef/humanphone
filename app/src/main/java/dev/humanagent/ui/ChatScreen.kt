@@ -89,8 +89,9 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     var draft by remember { mutableStateOf("") }
 
-    // Reload the persisted transcript whenever the screen appears, and follow new turns.
-    LaunchedEffect(engine) { engine.refresh() }
+    // Follow new turns as they arrive; the engine loads the persisted transcript at startup.
+    // (ChatEngine.refresh() is deliberately not called from here: it re-opens the newest
+    // conversation and cancels an in-flight reply, which would lose work on a tab switch.)
     LaunchedEffect(messages.size, streaming) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
@@ -231,6 +232,13 @@ fun ChatScreen(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = "Type below or tap the mic to dictate. Replies are read out loud when the speaker toggle is on.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Send \"${ChatEngine.DO_PREFIX} <task>\" to have the assistant do it on the phone itself.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,

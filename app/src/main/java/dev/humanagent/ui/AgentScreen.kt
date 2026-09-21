@@ -65,6 +65,9 @@ fun AgentScreen(engineActive: Boolean) {
     val partial by voice.partial.collectAsState()
 
     var command by remember { mutableStateOf("") }
+    // Only dictation started from this screen's mic is consumed here: the floating bubble runs its
+    // own dictation, and a shared utterance must not be handed to the agent twice.
+    var dictatingHere by remember { mutableStateOf(false) }
     val traceState = rememberLazyListState()
     val transcript = state.transcript
     val firstTimestamp = transcript.firstOrNull()?.timestampMs ?: 0L
@@ -73,14 +76,19 @@ fun AgentScreen(engineActive: Boolean) {
         if (transcript.isNotEmpty()) traceState.animateScrollToItem(transcript.lastIndex)
     }
     // A dictated command is shown in the field and handed straight to the agent loop.
-    LaunchedEffect(voice, context) {
+    LaunchedEffect(voice) {
         voice.heard.collect { utterance ->
             val text = utterance.trim()
-            if (text.isNotEmpty()) {
+            if (dictatingHere && text.isNotEmpty()) {
+                dictatingHere = false
                 command = text
                 AgentService.run(context, text)
             }
         }
+    }
+    // A dictation that produced nothing (cancelled, silent, mic error) releases the claim.
+    LaunchedEffect(listening) {
+        if (!listening) dictatingHere = false
     }
 
     fun submitCommand() {
@@ -205,7 +213,15 @@ fun AgentScreen(engineActive: Boolean) {
             )
             Spacer(modifier = Modifier.width(8.dp))
             IconButton(
-                onClick = { if (listening) voice.stopListening() else voice.startListening() },
+                onClick = {
+                    if (listening) {
+                        dictatingHere = false
+                        voice.stopListening()
+                    } else {
+                        dictatingHere = true
+                        voice.startListening()
+                    }
+                },
             ) {
                 Icon(
                     imageVector = if (listening) Icons.Filled.MicOff else Icons.Filled.Mic,

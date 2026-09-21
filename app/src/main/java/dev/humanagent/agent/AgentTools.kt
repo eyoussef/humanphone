@@ -294,11 +294,11 @@ class AgentTools(
             }
         }
 
-    private fun stringProp(description: String, enum: List<String>? = null): JsonObject = buildJsonObject {
+    private fun stringProp(description: String, options: List<String>? = null): JsonObject = buildJsonObject {
         put("type", "string")
         put("description", description)
-        if (enum != null) {
-            putJsonArray("enum") { enum.forEach { add(it) } }
+        if (options != null) {
+            putJsonArray("enum") { options.forEach { add(it) } }
         }
     }
 
