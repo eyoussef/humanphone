@@ -10,10 +10,7 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
-import java.util.Locale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,8 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * The single [Handler] of this file. `SpeechRecognizer` and `TextToSpeech` are main-thread only, so
- * every call into them is marshalled onto the main looper through it.
+ * The single [Handler] of this file. `SpeechRecognizer` is main-thread only, so every call into it
+ * is marshalled onto the main looper through it.
  */
 private val speechHandler = Handler(Looper.getMainLooper())
 
@@ -57,6 +54,11 @@ class VoiceIO(private val context: Context) {
 
     /** Completed utterances in order. Nothing is replayed, so collect this live. */
     val heard: Flow<String> = _heard
+
+    private val _language = MutableStateFlow("")
+
+    /** BCP-47 tag the recognizer is asked to listen for; empty means the device default. */
+    val language: StateFlow<String> = _language.asStateFlow()
 
     private var recognizer: SpeechRecognizer? = null
     private var listeningRequested = false
@@ -149,6 +151,14 @@ class VoiceIO(private val context: Context) {
         }
     }
 
+    /**
+     * Chooses the language the recognizer listens for. The tag is BCP-47 and an empty tag restores
+     * the device default. It takes effect on the next session, including the automatic restarts.
+     */
+    fun setLanguage(tag: String) {
+        onMainThread { _language.value = tag }
+    }
+
     /** Releases the recognizer. This instance cannot be used afterwards. */
     fun destroy() {
         onMainThread {
@@ -208,6 +218,8 @@ class VoiceIO(private val context: Context) {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
+        val tag = _language.value
+        if (tag.isNotBlank()) putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag)
     }
 
     private fun scheduleRestart() {
@@ -228,143 +240,5 @@ class VoiceIO(private val context: Context) {
 
     private companion object {
         const val RESTART_DELAY_MS = 300L
-    }
-}
-
-/**
- * Voice output built on [TextToSpeech]. [say] flushes whatever is currently being spoken and
- * [speaking] tracks the engine's own progress reports. If no usable TTS engine is present the
- * speaker degrades to a silent no-op instead of failing the caller.
- */
-class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
-
-    private val _speaking = MutableStateFlow(false)
-
-    /** True while the engine is actually rendering an utterance. */
-    val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
-
-    private var engine: TextToSpeech? = null
-    private var ready = false
-    private var available = true
-    private var pending: String? = null
-
-    /** Engines throw on utterances longer than this, so a long reply is cut down to fit. */
-    private val maxUtteranceChars = TextToSpeech.getMaxSpeechInputLength()
-
-    private val progress = object : UtteranceProgressListener() {
-
-        override fun onStart(utteranceId: String?) {
-            _speaking.value = true
-        }
-
-        override fun onDone(utteranceId: String?) {
-            _speaking.value = false
-        }
-
-        @Deprecated("Deprecated in Java")
-        override fun onError(utteranceId: String?) {
-            _speaking.value = false
-        }
-
-        override fun onError(utteranceId: String?, errorCode: Int) {
-            _speaking.value = false
-        }
-
-        override fun onStop(utteranceId: String?, interrupted: Boolean) {
-            _speaking.value = false
-        }
-    }
-
-    init {
-        // Building the engine touches the TTS service, so it starts on the main thread.
-        onMainThread { startEngine() }
-    }
-
-    /**
-     * Speaks [text], replacing anything already queued. Blank text is ignored. Text handed over
-     * before the engine finished initialising is spoken as soon as it is ready.
-     */
-    fun say(text: String) {
-        val clean = text.trim()
-        if (clean.isEmpty()) return
-        onMainThread {
-            if (!available) return@onMainThread
-            if (ready) {
-                speakNow(clean)
-            } else {
-                startEngine()
-                if (!available) return@onMainThread
-                pending = clean
-            }
-        }
-    }
-
-    /** Stops playback and shuts the engine down. [say] is a no-op afterwards. */
-    fun destroy() {
-        onMainThread {
-            available = false
-            ready = false
-            pending = null
-            _speaking.value = false
-            val active = engine
-            engine = null
-            if (active != null) {
-                try {
-                    active.stop()
-                } catch (e: IllegalStateException) {
-                    // The engine is gone already.
-                }
-                try {
-                    active.shutdown()
-                } catch (e: IllegalStateException) {
-                    // The engine is gone already.
-                }
-            }
-        }
-    }
-
-    override fun onInit(status: Int) {
-        onMainThread {
-            val active = engine
-            if (status != TextToSpeech.SUCCESS || active == null) {
-                available = false
-                ready = false
-                pending = null
-                _speaking.value = false
-                return@onMainThread
-            }
-            active.setOnUtteranceProgressListener(progress)
-            active.setLanguage(Locale.US)
-            active.setSpeechRate(SPEECH_RATE)
-            ready = true
-            val queued = pending
-            pending = null
-            if (queued != null) speakNow(queued)
-        }
-    }
-
-    private fun startEngine() {
-        if (engine != null || !available) return
-        try {
-            engine = TextToSpeech(context, this)
-        } catch (e: Exception) {
-            available = false
-        }
-    }
-
-    private fun speakNow(text: String) {
-        val active = engine ?: return
-        val utterance = if (text.length > maxUtteranceChars) text.take(maxUtteranceChars) else text
-        val result = try {
-            active.speak(utterance, TextToSpeech.QUEUE_FLUSH, Bundle(), UTTERANCE_ID)
-        } catch (e: IllegalStateException) {
-            TextToSpeech.ERROR
-        }
-        _speaking.value = result != TextToSpeech.ERROR
-    }
-
-    private companion object {
-        const val UTTERANCE_ID = "humanphone-speech"
-        const val SPEECH_RATE = 1.0f
     }
 }

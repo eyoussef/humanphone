@@ -15,6 +15,10 @@ data class ChatTurn(
     val role: String,
     val text: String,
     val timestampMs: Long,
+    /** Absolute paths of images attached to this turn, shown in the bubble and sent to the model. */
+    val imagePaths: List<String> = emptyList(),
+    /** Absolute path of a recorded voice note attached to this turn. */
+    val audioPath: String? = null,
 )
 
 @Serializable

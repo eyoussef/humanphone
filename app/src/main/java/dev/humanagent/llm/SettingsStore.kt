@@ -27,6 +27,14 @@ data class AppSettings(
     val sendScreenshots: Boolean = false,
     val maxSteps: Int = 20,
     val stepDelayMs: Int = 600,
+    /** BCP-47 tag for speech recognition, empty means the device default. */
+    val sttLanguage: String = "",
+    /** BCP-47 tag for speech synthesis, empty means the device default. */
+    val ttsLanguage: String = "",
+    /** Whether the floating assistant dot is shown. */
+    val showBubble: Boolean = true,
+    /** Hands-free conversation: keep listening after every spoken reply. */
+    val liveMode: Boolean = false,
 ) {
     fun toProviderConfig(): ProviderConfig = ProviderConfig(
         kind = providerKind,

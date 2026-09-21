@@ -10,9 +10,11 @@ import dev.humanagent.llm.Message
 import dev.humanagent.llm.SettingsStore
 import dev.humanagent.llm.StreamEvent
 import dev.humanagent.llm.ToolSpec
+import dev.humanagent.util.ImagePrep
 import dev.humanagent.util.JsonArgs
 import dev.humanagent.util.Markdown
 import dev.humanagent.voice.Speaker
+import dev.humanagent.voice.VoiceIO
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,8 +23,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -38,6 +42,7 @@ class ChatEngine(
     private val settingsStore: SettingsStore,
     private val speaker: Speaker,
     private val memory: MemoryStore,
+    private val voice: VoiceIO,
 ) {
 
     private val store = ConversationStore(File(context.filesDir, "conversations.json"))
@@ -60,6 +65,12 @@ class ChatEngine(
     val error: StateFlow<String?> = _error.asStateFlow()
 
     private var job: Job? = null
+    private var liveJob: Job? = null
+
+    private val _liveMode = MutableStateFlow(false)
+
+    /** Hands-free conversation: after every spoken reply the microphone opens again. */
+    val liveMode: StateFlow<Boolean> = _liveMode.asStateFlow()
 
     suspend fun refresh() {
         val loaded = store.load().sortedByDescending { it.updatedAtMs }
@@ -124,6 +135,85 @@ class ChatEngine(
         job?.cancel()
         job = null
         _streaming.value = false
+    }
+
+    /** Sends text plus attached pictures; the last user turn carries them to the model. */
+    fun sendWithImages(text: String, imagePaths: List<String>) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() && imagePaths.isEmpty()) return
+        if (_streaming.value) return
+        append(ChatTurn(ROLE_USER, trimmed, now(), imagePaths = imagePaths))
+        _error.value = null
+        persist()
+        job = scope.launch { respond() }
+    }
+
+    /** Sends a recorded voice note; it is kept in the transcript and marked for the model. */
+    fun sendVoiceNote(path: String) {
+        if (_streaming.value) return
+        append(ChatTurn(ROLE_USER, "", now(), audioPath = path))
+        _error.value = null
+        persist()
+        job = scope.launch { respond() }
+    }
+
+    /** Keeps a voice note in the transcript without asking the model anything. */
+    fun attachVoiceNote(path: String) {
+        append(ChatTurn(ROLE_USER, "", now(), audioPath = path))
+        persist()
+    }
+
+    /** Flips live mode, remembers it and starts or stops listening. */
+    fun toggleLiveMode() {
+        val next = !_liveMode.value
+        _liveMode.value = next
+        scope.launch { settingsStore.update { it.copy(liveMode = next) } }
+        if (next) {
+            startLiveLoop()
+        } else {
+            liveJob?.cancel()
+            liveJob = null
+            voice.stopListening()
+        }
+    }
+
+    /** Applies live mode from settings without writing them back. */
+    fun setLiveMode(enabled: Boolean) {
+        if (_liveMode.value == enabled) return
+        _liveMode.value = enabled
+        if (enabled) {
+            startLiveLoop()
+        } else {
+            liveJob?.cancel()
+            liveJob = null
+            voice.stopListening()
+        }
+    }
+
+    private fun startLiveLoop() {
+        liveJob?.cancel()
+        liveJob = scope.launch {
+            voice.heard.collect { utterance ->
+                if (!_liveMode.value) return@collect
+                val heard = utterance.trim()
+                if (heard.isEmpty() || _streaming.value) return@collect
+                send(heard)
+                job?.join()
+                awaitSpeechEnd()
+                if (_liveMode.value) voice.startListening()
+            }
+        }
+        voice.startListening()
+    }
+
+    /**
+     * Waits for the spoken reply to finish before opening the microphone again, otherwise the
+     * recogniser would transcribe the assistant's own voice.
+     */
+    private suspend fun awaitSpeechEnd() {
+        // TTS needs a moment to spin up; waiting for it to start first avoids recording our own voice.
+        withTimeoutOrNull(3_000L) { speaker.speaking.first { it } }
+        withTimeoutOrNull(30_000L) { speaker.speaking.first { !it } }
     }
 
     private suspend fun respond() {
@@ -202,15 +292,20 @@ class ChatEngine(
     private fun history(settings: dev.humanagent.llm.AppSettings): List<Message> {
         val messages = ArrayList<Message>()
         messages += Message.system(systemPrompt(settings))
-        _messages.value
-            .filter { it.text.isNotBlank() }
-            .takeLast(HISTORY_TURNS)
-            .forEach { turn ->
-                messages += when (turn.role) {
-                    ROLE_USER -> Message.user(turn.text)
-                    else -> Message.assistant(turn.text)
-                }
+        val recent = _messages.value.filter { it.text.isNotBlank() || it.audioPath != null }.takeLast(HISTORY_TURNS)
+        recent.forEachIndexed { index, turn ->
+            val isLast = index == recent.lastIndex
+            messages += when (turn.role) {
+                ROLE_USER -> Message(
+                    role = ROLE_USER,
+                    content = turn.text.ifBlank { if (turn.audioPath != null) "[voice note]" else "" },
+                    // Only the newest turn carries pixels; older pictures are already described in the text.
+                    images = if (isLast) ImagePrep.encodeAll(turn.imagePaths) else emptyList(),
+                )
+
+                else -> Message.assistant(turn.text)
             }
+        }
         return messages
     }
 
@@ -225,6 +320,8 @@ class ChatEngine(
         append("instead of describing the steps. Answer in words only for things you can answer yourself.\n")
         append("- Keep replies short, warm and spoken-friendly: they may be read out loud.\n")
         append("- Write plain conversational text: never use markdown asterisks, hashes, tables or bullet symbols.\n")
+        append("- A message marked \"[voice note]\" is a recording you cannot hear: answer in one short line, ")
+        append("say you cannot play audio, and ask them to dictate it with the microphone or type it instead.\n")
         val notes = memory.snapshot()
         if (notes.isNotEmpty()) {
             append("\nWhat you remember about this user:\n")

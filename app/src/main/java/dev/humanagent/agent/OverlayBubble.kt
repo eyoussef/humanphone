@@ -12,6 +12,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.TextView
 import kotlin.math.abs
 
@@ -23,11 +24,13 @@ class OverlayBubble(
     private val context: Context,
     private val onTap: () -> Unit,
     private val onLongPress: () -> Unit,
+    private val onClose: () -> Unit,
 ) {
 
     private val windowManager: WindowManager? = context.getSystemService(WindowManager::class.java)
     private val main = Handler(Looper.getMainLooper())
-    private var view: TextView? = null
+    private var view: FrameLayout? = null
+    private var dot: TextView? = null
     private var params: WindowManager.LayoutParams? = null
 
     val isShowing: Boolean get() = view != null
@@ -37,7 +40,11 @@ class OverlayBubble(
         if (view != null) return
         main.post {
             val manager = windowManager ?: return@post
-            val text = TextView(context).apply {
+            val density = context.resources.displayMetrics.density
+            val size = (56 * density).toInt()
+            val badgeSize = (20 * density).toInt()
+
+            val bubbleView = TextView(context).apply {
                 text = "HP"
                 setTextColor(Color.WHITE)
                 textSize = 14f
@@ -48,7 +55,23 @@ class OverlayBubble(
                     setStroke(3, Color.parseColor("#8BE9C0"))
                 }
             }
-            val size = (56 * context.resources.displayMetrics.density).toInt()
+            val close = TextView(context).apply {
+                text = "✕"
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.parseColor("#CC1B1B1B"))
+                    setStroke(2, Color.WHITE)
+                }
+                setOnClickListener { onClose() }
+            }
+            val root = FrameLayout(context).apply {
+                addView(bubbleView, FrameLayout.LayoutParams(size, size, Gravity.TOP or Gravity.START))
+                addView(close, FrameLayout.LayoutParams(badgeSize, badgeSize, Gravity.TOP or Gravity.END))
+            }
+
             val layoutParams = WindowManager.LayoutParams(
                 size,
                 size,
@@ -85,7 +108,7 @@ class OverlayBubble(
             var originY = 0
             var dragging = false
 
-            text.setOnTouchListener { _, event ->
+            bubbleView.setOnTouchListener { _, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         startX = event.rawX
@@ -103,7 +126,7 @@ class OverlayBubble(
                         if (dragging) {
                             layoutParams.x = (originX + dx).toInt()
                             layoutParams.y = (originY + dy).toInt()
-                            runCatching { manager.updateViewLayout(text, layoutParams) }
+                            runCatching { manager.updateViewLayout(bubbleView, layoutParams) }
                         }
                     }
 
@@ -115,16 +138,17 @@ class OverlayBubble(
                 true
             }
 
-            runCatching { manager.addView(text, layoutParams) }
+            runCatching { manager.addView(root, layoutParams) }
                 .onSuccess {
-                    view = text
+                    view = root
+                    dot = bubbleView
                     params = layoutParams
                 }
         }
     }
 
     fun setLabel(label: String) {
-        main.post { view?.text = label }
+        main.post { dot?.text = label }
     }
 
     fun hide() {
@@ -132,6 +156,7 @@ class OverlayBubble(
             val current = view ?: return@post
             runCatching { windowManager?.removeView(current) }
             view = null
+            dot = null
             params = null
         }
     }

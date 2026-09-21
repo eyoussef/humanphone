@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
@@ -32,10 +33,14 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -58,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.humanagent.agent.AgentAccessibilityService
 import dev.humanagent.agent.AgentService
+import dev.humanagent.HumanPhoneApp
 import dev.humanagent.llm.AppSettings
 import dev.humanagent.llm.ProviderKind
 import dev.humanagent.llm.SettingsStore
@@ -299,6 +305,106 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             )
         }
 
+        SectionCard(title = "Language & voices") {
+            val deviceLanguages = remember { deviceLanguageTags() }
+            val shownDeviceLanguages = remember(deviceLanguages) {
+                deviceLanguages.take(MAX_LANGUAGE_OPTIONS)
+            }
+            var ttsLanguages by remember {
+                mutableStateOf(HumanPhoneApp.instance.speaker.availableLanguages())
+            }
+
+            LanguagePicker(
+                label = "Speech input language",
+                selected = loaded.sttLanguage,
+                options = shownDeviceLanguages,
+                onSelected = { tag -> write { it.copy(sttLanguage = tag) } },
+            )
+            if (deviceLanguages.size > MAX_LANGUAGE_OPTIONS) {
+                Text(
+                    text = "Listing the first $MAX_LANGUAGE_OPTIONS of ${deviceLanguages.size} " +
+                        "languages this device knows.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                LanguagePicker(
+                    label = "Spoken replies language",
+                    selected = loaded.ttsLanguage,
+                    options = ttsLanguages,
+                    onSelected = { tag -> write { it.copy(ttsLanguage = tag) } },
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = {
+                        ttsLanguages = HumanPhoneApp.instance.speaker.availableLanguages()
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "Re-check the voices installed on this device",
+                    )
+                }
+            }
+            if (ttsLanguages.isEmpty()) {
+                Text(
+                    text = "No installed voices listed yet — the speech engine may still be starting up.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        runCatching {
+                            systemSettingsLauncher.launch(
+                                Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA),
+                            )
+                        }
+                    },
+                ) {
+                    Text(text = "Download voices")
+                }
+                OutlinedButton(
+                    onClick = {
+                        runCatching {
+                            systemSettingsLauncher.launch(Intent(TTS_SETTINGS_ACTION))
+                        }
+                    },
+                ) {
+                    Text(text = "TTS settings")
+                }
+                OutlinedButton(
+                    onClick = {
+                        runCatching {
+                            systemSettingsLauncher.launch(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+                        }
+                    },
+                ) {
+                    Text(text = "Download offline speech")
+                }
+            }
+
+            SwitchRow(
+                title = "Show the floating dot",
+                detail = "Keeps the assistant dot over other apps while the agent service runs.",
+                checked = loaded.showBubble,
+                onCheckedChange = { checked -> write { it.copy(showBubble = checked) } },
+            )
+        }
+
         SectionCard(title = "Agent") {
             SwitchRow(
                 title = "Attach screenshots",
@@ -509,6 +615,52 @@ private fun ValueSlider(
 }
 
 @Composable
+private fun LanguagePicker(
+    label: String,
+    selected: String,
+    options: List<String>,
+    onSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = if (selected.isBlank()) DEVICE_DEFAULT_LABEL else selected,
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            label = { Text(text = label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(text = DEVICE_DEFAULT_LABEL) },
+                onClick = {
+                    expanded = false
+                    onSelected("")
+                },
+            )
+            options.forEach { tag ->
+                DropdownMenuItem(
+                    text = { Text(text = tag) },
+                    onClick = {
+                        expanded = false
+                        onSelected(tag)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SwitchRow(
     title: String,
     detail: String,
@@ -632,3 +784,21 @@ private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     ) ?: return false
     return enabled.split(':').any { it.equals(component, ignoreCase = true) }
 }
+
+/** Distinct BCP-47 tags for every locale this device knows, sorted. */
+private fun deviceLanguageTags(): List<String> =
+    Locale.getAvailableLocales()
+        .mapNotNull { locale -> runCatching { locale.toLanguageTag() }.getOrNull() }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .sorted()
+
+/** The entry that clears a language back to whatever the device uses. */
+private const val DEVICE_DEFAULT_LABEL = "Device default"
+
+/** Hundreds of entries make a dropdown unusable, so the input list stops here. */
+private const val MAX_LANGUAGE_OPTIONS = 120
+
+/** Action of the system text-to-speech settings page. */
+private const val TTS_SETTINGS_ACTION = "com.android.settings.TTS_SETTINGS"
+

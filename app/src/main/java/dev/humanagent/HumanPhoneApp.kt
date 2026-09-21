@@ -34,10 +34,21 @@ class HumanPhoneApp : Application() {
         memory = MemoryStore(this)
         speaker = Speaker(this)
         voice = VoiceIO(this)
-        chatEngine = ChatEngine(this, settingsStore, speaker, memory)
+        chatEngine = ChatEngine(this, settingsStore, speaker, memory, voice)
         scope.launch {
             memory.load()
             chatEngine.refresh()
+        }
+        scope.launch {
+            // Languages follow the settings from the very first emission; live mode is only applied
+            // from later changes so reopening the app never opens the microphone on its own.
+            var startingUp = true
+            settingsStore.settings.collect { settings ->
+                voice.setLanguage(settings.sttLanguage)
+                speaker.setLanguage(settings.ttsLanguage)
+                if (!startingUp) chatEngine.setLiveMode(settings.liveMode)
+                startingUp = false
+            }
         }
     }
 

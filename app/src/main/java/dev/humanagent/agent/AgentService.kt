@@ -68,17 +68,22 @@ class AgentService : Service() {
             }
         }
 
-        if (Settings.canDrawOverlays(this)) installBubble()
+        scope.launch {
+            app.settingsStore.settings.collect { settings ->
+                if (settings.showBubble && Settings.canDrawOverlays(this@AgentService)) {
+                    installBubble()
+                } else {
+                    bubble?.hide()
+                    bubble = null
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_HALT -> engine?.halt()
-            ACTION_RUN -> {
-                installBubble()
-                intent.getStringExtra(EXTRA_COMMAND)?.let { command -> engine?.run(command) }
-            }
-            else -> installBubble()
+            ACTION_RUN -> intent.getStringExtra(EXTRA_COMMAND)?.let { command -> engine?.run(command) }
         }
         return START_STICKY
     }
@@ -99,7 +104,15 @@ class AgentService : Service() {
             context = this,
             onTap = { openApp() },
             onLongPress = { listenForCommand() },
+            onClose = { dismissBubble() },
         ).also { it.show() }
+    }
+
+    /** The user closed the dot: take it away now and remember the choice for the next start. */
+    private fun dismissBubble() {
+        bubble?.hide()
+        bubble = null
+        scope.launch { HumanPhoneApp.instance.settingsStore.update { it.copy(showBubble = false) } }
     }
 
     private fun openApp() {
