@@ -9,6 +9,8 @@ android {
     namespace = "dev.humanagent"
     compileSdk = 35
 
+    buildToolsVersion = "35.0.0"
+
     defaultConfig {
         applicationId = "dev.humanagent"
         minSdk = 30

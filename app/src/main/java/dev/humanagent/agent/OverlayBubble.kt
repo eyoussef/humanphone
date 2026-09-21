@@ -34,8 +34,9 @@ class OverlayBubble(
 
     @SuppressLint("ClickableViewAccessibility")
     fun show() {
-        if (view != null || windowManager == null) return
+        if (view != null) return
         main.post {
+            val manager = windowManager ?: return@post
             val text = TextView(context).apply {
                 text = "HP"
                 setTextColor(Color.WHITE)
@@ -102,7 +103,7 @@ class OverlayBubble(
                         if (dragging) {
                             layoutParams.x = (originX + dx).toInt()
                             layoutParams.y = (originY + dy).toInt()
-                            runCatching { windowManager?.updateViewLayout(text, layoutParams) }
+                            runCatching { manager.updateViewLayout(text, layoutParams) }
                         }
                     }
 
@@ -114,7 +115,7 @@ class OverlayBubble(
                 true
             }
 
-            runCatching { windowManager.addView(text, layoutParams) }
+            runCatching { manager.addView(text, layoutParams) }
                 .onSuccess {
                     view = text
                     params = layoutParams

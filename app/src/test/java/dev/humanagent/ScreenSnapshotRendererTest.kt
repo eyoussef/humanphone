@@ -19,7 +19,7 @@ class ScreenSnapshotRendererTest {
         )
         assertTrue(rendered.startsWith("Screen: Messages — Chat with Sam (42 nodes, 2 addressable)"))
         assertTrue(rendered.contains("[3] Button \"Send\""))
-        assertTrue(rendered.contains("[9] TextView \"Hi\""))
+        assertTrue(rendered.contains("[9] Button \"Hi\""))
         assertTrue(rendered.contains("clickable"))
     }
 
@@ -58,7 +58,19 @@ class ScreenSnapshotRendererTest {
         )
         assertTrue(rendered.contains("unchecked"))
         assertTrue(rendered.contains("editable focused"))
-        assertTrue(rendered.contains("desc=\"Message\""))
+        assertEquals(1, Regex("\\[6] EditText \"Message\" @100,200 editable focused").findAll(rendered).count())
+    }
+
+    @Test
+    fun aDescriptionIsAlsoPrintedWhenThereIsSeparateText() {
+        val rendered = ScreenSnapshotRenderer.render(
+            "App",
+            "",
+            1,
+            false,
+            listOf(element(7, "Delete", description = "Delete this message")),
+        )
+        assertTrue(rendered.contains("[7] Button \"Delete\" desc=\"Delete this message\""))
     }
 
     @Test

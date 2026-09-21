@@ -8,12 +8,14 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -25,6 +27,12 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
+
+/** Text of a JSON value: empty for nulls, objects and arrays instead of throwing. */
+private fun JsonElement?.asTextOrEmpty(): String {
+    val primitive = this as? JsonPrimitive ?: return ""
+    return if (primitive is JsonNull) "" else primitive.content
+}
 
 /**
  * Minimal OpenAI-compatible chat client with SSE streaming and tool-call accumulation.
@@ -194,7 +202,7 @@ class LlmClient(
         return StreamEvent.Completed(
             Message(
                 role = "assistant",
-                content = message["content"]?.jsonPrimitive?.contentOrEmpty(),
+                content = message["content"].asTextOrEmpty(),
                 toolCalls = parseToolCalls(message["tool_calls"]),
             )
         )
@@ -216,17 +224,17 @@ class LlmClient(
                 if (raw is JsonArray) {
                     raw.forEachIndexed { position, element ->
                         val call = element.jsonObject
-                        val index = call["index"]?.jsonPrimitive?.contentOrEmpty()?.toIntOrNull() ?: position
+                        val index = call["index"].asTextOrEmpty().toIntOrNull() ?: position
                         val partial = calls.getOrPut(index) {
-                            PartialCall(call["id"]?.jsonPrimitive?.contentOrEmpty().ifEmpty { "call_$index" })
+                            PartialCall(call["id"].asTextOrEmpty().ifEmpty { "call_$index" })
                         }
                         val function = call["function"]?.jsonObject
-                        function?.get("name")?.jsonPrimitive?.contentOrEmpty()?.let { if (it.isNotEmpty()) partial.name = it }
-                        function?.get("arguments")?.jsonPrimitive?.contentOrEmpty()?.let { partial.arguments.append(it) }
+                        function?.get("name").asTextOrEmpty().let { if (it.isNotEmpty()) partial.name = it }
+                        function?.get("arguments").asTextOrEmpty().let { partial.arguments.append(it) }
                     }
                 }
             }
-            return delta["content"]?.jsonPrimitive?.contentOrEmpty().also { content.append(it) }
+            return delta["content"].asTextOrEmpty().also { content.append(it) }
         }
 
         fun toMessage(): Message = Message(
@@ -244,23 +252,20 @@ class LlmClient(
         )
     }
 
-    private fun parseToolCalls(element: kotlinx.serialization.json.JsonElement?): List<ToolCall> {
+    private fun parseToolCalls(element: JsonElement?): List<ToolCall> {
         val array = element as? JsonArray ?: return emptyList()
         return array.mapIndexedNotNull { index, raw ->
             val call = raw as? JsonObject ?: return@mapIndexedNotNull null
             val function = call["function"]?.jsonObject ?: return@mapIndexedNotNull null
-            val name = function["name"]?.jsonPrimitive?.contentOrEmpty()
+            val name = function["name"].asTextOrEmpty()
             if (name.isBlank()) return@mapIndexedNotNull null
             ToolCall(
-                id = call["id"]?.jsonPrimitive?.contentOrEmpty().ifBlank { "call_$index" },
+                id = call["id"].asTextOrEmpty().ifBlank { "call_$index" },
                 name = name,
-                arguments = function["arguments"]?.jsonPrimitive?.contentOrEmpty().ifBlank { "{}" },
+                arguments = function["arguments"].asTextOrEmpty().ifBlank { "{}" },
             )
         }
     }
-
-    private fun kotlinx.serialization.json.JsonPrimitive?.contentOrEmpty(): String =
-        if (this == null || this is kotlinx.serialization.json.JsonNull) "" else content
 
     companion object {
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
