@@ -68,5 +68,19 @@ class ConversationStore(
             if (collapsed.isEmpty()) return "New chat"
             return if (collapsed.length <= 42) collapsed else collapsed.take(41) + "…"
         }
+
+        /**
+         * Title for the conversation opened with [turn]: its words when it has any, and otherwise
+         * what was attached — a voice note opener must not read as an empty "New chat".
+         */
+        fun titleFor(turn: ChatTurn?): String {
+            val words = turn?.text.orEmpty()
+            if (words.isNotBlank()) return titleFor(words)
+            return when {
+                turn?.audioPath != null -> "Voice note"
+                !turn?.imagePaths.isNullOrEmpty() -> "Photos"
+                else -> titleFor("")
+            }
+        }
     }
 }

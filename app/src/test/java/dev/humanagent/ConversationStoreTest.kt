@@ -64,4 +64,12 @@ class ConversationStoreTest {
         assertEquals(42, title.length)
         assertTrue(title.endsWith("…"))
     }
+
+    @Test
+    fun anOpeningTurnWithoutWordsIsTitledByItsAttachment() {
+        assertEquals("Voice note", ConversationStore.titleFor(ChatTurn("user", "  ", 1L, audioPath = "/tmp/n.m4a")))
+        assertEquals("Photos", ConversationStore.titleFor(ChatTurn("user", "", 1L, imagePaths = listOf("/tmp/p.jpg"))))
+        assertEquals("hello", ConversationStore.titleFor(ChatTurn("user", "hello", 1L, audioPath = "/tmp/n.m4a")))
+        assertEquals("New chat", ConversationStore.titleFor(null))
+    }
 }

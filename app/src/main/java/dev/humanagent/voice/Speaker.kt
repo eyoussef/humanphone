@@ -7,8 +7,6 @@ import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,10 +43,14 @@ class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
     /** BCP-47 tag the engine is asked to speak; empty means the device default. */
     val language: StateFlow<String> = _language.asStateFlow()
 
+    private val _availableLanguages = MutableStateFlow<List<String>>(emptyList())
+
     private var engine: TextToSpeech? = null
     private var ready = false
     private var available = true
     private var pending: String? = null
+    private var speechRate = DEFAULT_SPEECH_RATE
+    private var pitch = DEFAULT_PITCH
 
     /** Engines throw on utterances longer than this, so a long reply is cut down to fit. */
     private val maxUtteranceChars = TextToSpeech.getMaxSpeechInputLength()
@@ -114,21 +116,42 @@ class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
     }
 
     /**
-     * BCP-47 tags this engine reports it can speak, sorted and without duplicates. The list is empty
-     * while the engine is still initialising or when there is no engine at all. The query runs on
-     * the main thread, where [TextToSpeech] insists on living.
+     * Sets how fast replies are spoken; 1.0 is the engine's normal speed. Values outside
+     * [MIN_SPEECH_RATE]..[MAX_SPEECH_RATE] are clamped, and an engine that is still initialising
+     * picks the value up in [onInit].
      */
-    fun availableLanguages(): List<String> {
-        if (Looper.myLooper() == Looper.getMainLooper()) return queryAvailableLanguages()
-        val latch = CountDownLatch(1)
-        var tags: List<String> = emptyList()
-        speechHandler.post {
-            tags = queryAvailableLanguages()
-            latch.countDown()
+    fun setSpeechRate(rate: Float) {
+        onMainThread {
+            speechRate = rate.coerceIn(MIN_SPEECH_RATE, MAX_SPEECH_RATE)
+            if (ready) runCatching { engine?.setSpeechRate(speechRate) }
         }
-        val answered = runCatching { latch.await(QUERY_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
-            .getOrDefault(false)
-        return if (answered) tags else emptyList()
+    }
+
+    /**
+     * Sets the pitch of the voice; 1.0 is the engine's normal pitch. Values outside
+     * [MIN_PITCH]..[MAX_PITCH] are clamped.
+     */
+    fun setPitch(value: Float) {
+        onMainThread {
+            pitch = value.coerceIn(MIN_PITCH, MAX_PITCH)
+            if (ready) runCatching { engine?.setPitch(pitch) }
+        }
+    }
+
+    /**
+     * BCP-47 tags this engine reports it can speak, sorted and without duplicates. The list is
+     * cached: it is filled once the engine is up and only re-queried by [refreshLanguages], because
+     * every entry costs a round-trip to the speech service. It is empty while the engine is still
+     * initialising or when there is no engine at all.
+     */
+    fun availableLanguages(): List<String> = _availableLanguages.value
+
+    /** Same list as [availableLanguages], as state so a settings screen can follow it. */
+    val availableLanguagesFlow: StateFlow<List<String>> = _availableLanguages.asStateFlow()
+
+    /** Re-queries the engine, for example after the user installed another voice. */
+    fun refreshLanguages() {
+        onMainThread { speechHandler.post { _availableLanguages.value = queryAvailableLanguages() } }
     }
 
     /** Stops playback and shuts the engine down. [say] is a no-op afterwards. */
@@ -168,8 +191,10 @@ class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
             active.setOnUtteranceProgressListener(progress)
             // The language may have been picked before the engine came up.
             applyLanguage()
-            active.setSpeechRate(SPEECH_RATE)
+            applyTimbre(active)
             ready = true
+            // The installed voices are listed once the engine is up, away from the first frames.
+            refreshLanguages()
             val queued = pending
             pending = null
             if (queued != null) speakNow(queued)
@@ -203,6 +228,12 @@ class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
         if (!acceptLanguage(active, requested) && requested != Locale.US) {
             acceptLanguage(active, Locale.US)
         }
+    }
+
+    /** Pushes the chosen speed and pitch into a live engine. */
+    private fun applyTimbre(active: TextToSpeech) {
+        runCatching { active.setSpeechRate(speechRate) }
+        runCatching { active.setPitch(pitch) }
     }
 
     /** True when the engine accepted [locale] for speaking. */
@@ -256,7 +287,11 @@ class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
 
     private companion object {
         const val UTTERANCE_ID = "humanphone-speech"
-        const val SPEECH_RATE = 1.0f
-        const val QUERY_TIMEOUT_SECONDS = 5L
+        const val DEFAULT_SPEECH_RATE = 1.0f
+        const val DEFAULT_PITCH = 1.0f
+        const val MIN_SPEECH_RATE = 0.5f
+        const val MAX_SPEECH_RATE = 2.0f
+        const val MIN_PITCH = 0.5f
+        const val MAX_PITCH = 2.0f
     }
 }

@@ -28,11 +28,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
 import dev.humanagent.agent.AgentService
+import dev.humanagent.chat.ChatEngine
 import dev.humanagent.ui.AgentScreen
 import dev.humanagent.ui.ChatScreen
 import dev.humanagent.ui.HumanPhoneTheme
 import dev.humanagent.ui.SettingsScreen
+import kotlinx.coroutines.launch
 
 private const val TAB_CHAT = 0
 private const val TAB_AGENT = 1
@@ -63,9 +66,24 @@ class MainActivity : ComponentActivity() {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        // The bubble is only usable once the user allowed drawing over other apps.
-        if (Settings.canDrawOverlays(this) && !AgentService.isRunning.value) {
-            AgentService.start(this)
+        // The dot follows the stored preference: it comes back when the app is opened again unless
+        // the user dismissed it with its own close button or switched it off in Settings.
+        lifecycleScope.launch {
+            val settings = HumanPhoneApp.instance.settingsStore.current()
+            if (settings.showBubble && Settings.canDrawOverlays(this@MainActivity) &&
+                !AgentService.isRunning.value
+            ) {
+                AgentService.start(this@MainActivity)
+            }
+            // A live conversation the user left running is picked up once, when the app opens — and
+            // only when the microphone was already allowed, so opening the app never prompts.
+            val micGranted = ContextCompat.checkSelfPermission(
+                this@MainActivity,
+                Manifest.permission.RECORD_AUDIO,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (settings.liveMode && micGranted) {
+                HumanPhoneApp.instance.chatEngine.setLiveMode(true)
+            }
         }
 
         setContent {
@@ -112,8 +130,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Live mode is a conversation with the app on screen; coming back to it picks the
+        // microphone up again — but only once every other capture has let go.
+        HumanPhoneApp.instance.chatEngine.resumeLiveListening(ChatEngine.LivePause.BACKGROUND)
+        // A microphone type can only be claimed while the app is in the foreground.
+        AgentService.refreshForegroundTypes()
+    }
+
+    override fun onStop() {
+        // Nothing keeps the microphone open behind another app: a live conversation pauses while the
+        // app is away and resumes on return, and the dot has its own long-press dictation.
+        HumanPhoneApp.instance.chatEngine.pauseLiveListening(ChatEngine.LivePause.BACKGROUND)
+        super.onStop()
+    }
+
     override fun onDestroy() {
-        if (isFinishing) AgentService.stop(this)
+        // The dot outlives this window: the foreground service keeps the assistant available until
+        // the user closes the dot itself or switches it off in Settings.
         super.onDestroy()
     }
 }

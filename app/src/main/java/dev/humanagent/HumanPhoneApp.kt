@@ -40,12 +40,16 @@ class HumanPhoneApp : Application() {
             chatEngine.refresh()
         }
         scope.launch {
-            // Languages follow the settings from the very first emission; live mode is only applied
-            // from later changes so reopening the app never opens the microphone on its own.
+            // Languages and the voice's speed and pitch follow the settings from the very first
+            // emission; live mode is only applied from later changes, and MainActivity restores a
+            // stored session when the user actually opens the app.
             var startingUp = true
             settingsStore.settings.collect { settings ->
                 voice.setLanguage(settings.sttLanguage)
+                voice.setPreferOffline(settings.sttPreferOffline)
                 speaker.setLanguage(settings.ttsLanguage)
+                speaker.setSpeechRate(settings.ttsSpeechRate)
+                speaker.setPitch(settings.ttsPitch)
                 if (!startingUp) chatEngine.setLiveMode(settings.liveMode)
                 startingUp = false
             }

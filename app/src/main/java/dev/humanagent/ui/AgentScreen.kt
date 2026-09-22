@@ -1,5 +1,9 @@
 package dev.humanagent.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,11 +38,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,10 +52,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import dev.humanagent.HumanPhoneApp
 import dev.humanagent.agent.AgentService
 import dev.humanagent.agent.AgentStep
+import dev.humanagent.chat.ChatEngine
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 /**
  * Live view of the on-device agent: service switch, typed/ dictated command, halt button,
@@ -59,12 +68,17 @@ import java.util.Locale
 fun AgentScreen(engineActive: Boolean) {
     val context = LocalContext.current
     val voice = HumanPhoneApp.instance.voice
+    val settingsStore = HumanPhoneApp.instance.settingsStore
+    val scope = rememberCoroutineScope()
+    val chatEngine = HumanPhoneApp.instance.chatEngine
     val state by AgentService.loop.collectAsState()
     val serviceRunning by AgentService.isRunning.collectAsState()
     val listening by voice.isListening.collectAsState()
     val partial by voice.partial.collectAsState()
+    val voiceNotice by voice.notice.collectAsState()
 
     var command by remember { mutableStateOf("") }
+    var notice by remember { mutableStateOf<String?>(null) }
     // Only dictation started from this screen's mic is consumed here: the floating bubble runs its
     // own dictation, and a shared utterance must not be handed to the agent twice.
     var dictatingHere by remember { mutableStateOf(false) }
@@ -81,14 +95,27 @@ fun AgentScreen(engineActive: Boolean) {
             val text = utterance.trim()
             if (dictatingHere && text.isNotEmpty()) {
                 dictatingHere = false
+                notice = null
                 command = text
                 AgentService.run(context, text)
+                chatEngine.resumeLiveListening(ChatEngine.LivePause.DICTATION)
             }
         }
     }
     // A dictation that produced nothing (cancelled, silent, mic error) releases the claim.
     LaunchedEffect(listening) {
-        if (!listening) dictatingHere = false
+        if (!listening && dictatingHere) {
+            dictatingHere = false
+            chatEngine.resumeLiveListening(ChatEngine.LivePause.DICTATION)
+        }
+    }
+    // Leaving this screen ends any dictation it owned, so live mode is not left stuck without a
+    // microphone it can never get back.
+    DisposableEffect(Unit) {
+        onDispose {
+            chatEngine.resumeLiveListening(ChatEngine.LivePause.DICTATION)
+            if (dictatingHere) voice.stopListening()
+        }
     }
 
     fun submitCommand() {
@@ -96,6 +123,54 @@ fun AgentScreen(engineActive: Boolean) {
         if (text.isNotEmpty()) {
             AgentService.run(context, text)
             command = ""
+        }
+    }
+
+    // The microphone permission is asked for the first time the user reaches for the mic here; the
+    // action to run on a grant is stored, so the callback needs no forward reference.
+    var afterMicrophoneGrant: (() -> Unit)? by remember { mutableStateOf(null) }
+    val microphonePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val awaiting = afterMicrophoneGrant
+        afterMicrophoneGrant = null
+        if (granted) {
+            AgentService.refreshForegroundTypes()
+            awaiting?.invoke()
+        } else {
+            notice = "Microphone access is needed to dictate a command."
+        }
+    }
+
+    /**
+     * Dictates here, taking the microphone away from live mode. When the session cannot start (no
+     * recogniser, a busy microphone) the claim is released again and the reason is shown.
+     */
+    fun startDictation() {
+        // Live mode and this dictation must not both hold the microphone.
+        chatEngine.pauseLiveListening(ChatEngine.LivePause.DICTATION)
+        dictatingHere = true
+        voice.startListening()
+        if (voice.notice.value.isNotBlank()) {
+            dictatingHere = false
+            chatEngine.resumeLiveListening(ChatEngine.LivePause.DICTATION)
+        }
+    }
+
+    fun toggleDictation() {
+        if (listening) {
+            dictatingHere = false
+            voice.stopListening()
+            chatEngine.resumeLiveListening(ChatEngine.LivePause.DICTATION)
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            startDictation()
+        } else {
+            afterMicrophoneGrant = { startDictation() }
+            microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -138,7 +213,10 @@ fun AgentScreen(engineActive: Boolean) {
             Switch(
                 checked = serviceRunning,
                 onCheckedChange = { wanted ->
-                    if (wanted) AgentService.start(context) else AgentService.stop(context)
+                    // The switch is the dot's own setting, so it writes the preference too and the
+                    // Settings screen and the dot stay in step with each other.
+                    scope.launch { settingsStore.update { it.copy(showBubble = wanted) } }
+                    AgentService.syncBubble(context, wanted)
                 },
             )
         }
@@ -206,22 +284,19 @@ fun AgentScreen(engineActive: Boolean) {
                 placeholder = { Text("e.g. search the web for iPhone 17 prices, or text Alex I am late") },
                 maxLines = 3,
                 supportingText = {
-                    if (listening) {
-                        Text(if (partial.isBlank()) "Listening…" else partial)
+                    val shown = notice ?: voiceNotice.takeIf { it.isNotBlank() }
+                    when {
+                        listening -> Text(if (partial.isBlank()) "Listening…" else partial)
+                        shown != null -> Text(
+                            text = shown,
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
                 },
             )
             Spacer(modifier = Modifier.width(8.dp))
             IconButton(
-                onClick = {
-                    if (listening) {
-                        dictatingHere = false
-                        voice.stopListening()
-                    } else {
-                        dictatingHere = true
-                        voice.startListening()
-                    }
-                },
+                onClick = { toggleDictation() },
             ) {
                 Icon(
                     imageVector = if (listening) Icons.Filled.MicOff else Icons.Filled.Mic,

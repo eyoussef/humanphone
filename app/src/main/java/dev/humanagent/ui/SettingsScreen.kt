@@ -99,6 +99,8 @@ fun SettingsScreen(settingsStore: SettingsStore) {
     var temperature by remember(loaded.temperature) { mutableStateOf(loaded.temperature.toFloat()) }
     var maxSteps by remember(loaded.maxSteps) { mutableStateOf(loaded.maxSteps.toFloat()) }
     var stepDelay by remember(loaded.stepDelayMs) { mutableStateOf(loaded.stepDelayMs.toFloat()) }
+    var speechRate by remember(loaded.ttsSpeechRate) { mutableStateOf(loaded.ttsSpeechRate) }
+    var pitch by remember(loaded.ttsPitch) { mutableStateOf(loaded.ttsPitch) }
 
     fun write(transform: (AppSettings) -> AppSettings) {
         scope.launch { settingsStore.update(transform) }
@@ -142,6 +144,9 @@ fun SettingsScreen(settingsStore: SettingsStore) {
         micOn = hasPermission(context, Manifest.permission.RECORD_AUDIO)
         smsOn = hasPermission(context, Manifest.permission.SEND_SMS)
         contactsOn = hasPermission(context, Manifest.permission.READ_CONTACTS)
+        // A microphone permission granted here also lets the running service claim the microphone
+        // foreground type it needs for dictation from the floating dot.
+        if (micOn) AgentService.refreshForegroundTypes()
     }
 
     // Re-read the system state when a settings screen we opened comes back.
@@ -303,6 +308,24 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                 checked = loaded.speakReplies,
                 onCheckedChange = { checked -> write { it.copy(speakReplies = checked) } },
             )
+            ValueSlider(
+                label = "Speech rate",
+                valueText = String.format(Locale.US, "%.2f×", speechRate),
+                value = speechRate,
+                valueRange = 0.5f..2f,
+                steps = 14,
+                onValueChange = { speechRate = it },
+                onValueChangeFinished = { write { it.copy(ttsSpeechRate = speechRate) } },
+            )
+            ValueSlider(
+                label = "Voice pitch",
+                valueText = String.format(Locale.US, "%.2f", pitch),
+                value = pitch,
+                valueRange = 0.5f..2f,
+                steps = 14,
+                onValueChange = { pitch = it },
+                onValueChangeFinished = { write { it.copy(ttsPitch = pitch) } },
+            )
         }
 
         SectionCard(title = "Language & voices") {
@@ -310,15 +333,21 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             val shownDeviceLanguages = remember(deviceLanguages) {
                 deviceLanguages.take(MAX_LANGUAGE_OPTIONS)
             }
-            var ttsLanguages by remember {
-                mutableStateOf(HumanPhoneApp.instance.speaker.availableLanguages())
-            }
+            // The engine's own list: it arrives once the speech engine is up and is refreshed on
+            // demand, so opening this screen never waits on the text-to-speech service.
+            val ttsLanguages by HumanPhoneApp.instance.speaker.availableLanguagesFlow.collectAsState()
 
             LanguagePicker(
                 label = "Speech input language",
                 selected = loaded.sttLanguage,
                 options = shownDeviceLanguages,
                 onSelected = { tag -> write { it.copy(sttLanguage = tag) } },
+            )
+            SwitchRow(
+                title = "Prefer offline recognition",
+                detail = "Transcribes without a network connection when the installed recogniser can.",
+                checked = loaded.sttPreferOffline,
+                onCheckedChange = { checked -> write { it.copy(sttPreferOffline = checked) } },
             )
             if (deviceLanguages.size > MAX_LANGUAGE_OPTIONS) {
                 Text(
@@ -342,9 +371,7 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
-                    onClick = {
-                        ttsLanguages = HumanPhoneApp.instance.speaker.availableLanguages()
-                    },
+                    onClick = { HumanPhoneApp.instance.speaker.refreshLanguages() },
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Refresh,
@@ -401,7 +428,12 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                 title = "Show the floating dot",
                 detail = "Keeps the assistant dot over other apps while the agent service runs.",
                 checked = loaded.showBubble,
-                onCheckedChange = { checked -> write { it.copy(showBubble = checked) } },
+                onCheckedChange = { checked ->
+                    write { it.copy(showBubble = checked) }
+                    // Starting or stopping the service here means the dot appears (or goes away)
+                    // the moment the switch moves, instead of on the next app start.
+                    AgentService.syncBubble(context, checked)
+                },
             )
         }
 
@@ -629,7 +661,7 @@ private fun LanguagePicker(
         modifier = modifier,
     ) {
         OutlinedTextField(
-            value = if (selected.isBlank()) DEVICE_DEFAULT_LABEL else selected,
+            value = selected.toLanguageLabel(),
             onValueChange = {},
             readOnly = true,
             singleLine = true,
@@ -649,7 +681,7 @@ private fun LanguagePicker(
             )
             options.forEach { tag ->
                 DropdownMenuItem(
-                    text = { Text(text = tag) },
+                    text = { Text(text = tag.toLanguageLabel()) },
                     onClick = {
                         expanded = false
                         onSelected(tag)
@@ -658,6 +690,18 @@ private fun LanguagePicker(
             }
         }
     }
+}
+
+/**
+ * A tag as the user reads it: the locale's own name followed by the tag the engine understands,
+ * or the device default when the tag is empty.
+ */
+private fun String.toLanguageLabel(): String {
+    if (isBlank()) return DEVICE_DEFAULT_LABEL
+    return runCatching {
+        val name = Locale.forLanguageTag(this).getDisplayName(Locale.getDefault())
+        if (name.isBlank() || name.equals(this, ignoreCase = true)) this else "$name · $this"
+    }.getOrDefault(this)
 }
 
 @Composable

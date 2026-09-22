@@ -90,6 +90,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.humanagent.HumanPhoneApp
+import dev.humanagent.agent.AgentService
 import dev.humanagent.chat.ChatEngine
 import dev.humanagent.chat.ChatTurn
 import dev.humanagent.util.ImagePrep
@@ -125,6 +126,7 @@ fun ChatScreen(
     val activeId by engine.activeId.collectAsState()
     val listening by voice.isListening.collectAsState()
     val partial by voice.partial.collectAsState()
+    val voiceNotice by voice.notice.collectAsState()
     val speaking by speaker.speaking.collectAsState()
     val liveMode by engine.liveMode.collectAsState()
 
@@ -145,6 +147,8 @@ fun ChatScreen(
 
     DisposableEffect(Unit) {
         onDispose {
+            // Leaving the screen ends any capture it owned, so live mode gets the microphone back.
+            engine.resumeLiveListening(ChatEngine.LivePause.VOICE_NOTE)
             recorder.destroy()
             player.destroy()
         }
@@ -165,14 +169,34 @@ fun ChatScreen(
         }
     }
 
-    // Asked for the first time only when the user actually reaches for the microphone.
+    // Asked for the first time only when the user actually reaches for the microphone. The action
+    // is stored first, so the callback needs no reference to a function declared further down.
+    var afterRecordPermission: (() -> Unit)? by remember { mutableStateOf(null) }
     val recordPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
+        val awaiting = afterRecordPermission
+        afterRecordPermission = null
         if (granted) {
-            if (!recorder.start()) notice = "The microphone is busy — nothing was recorded."
+            AgentService.refreshForegroundTypes()
+            awaiting?.invoke()
         } else {
             notice = "Microphone access is needed to record a voice note."
+        }
+    }
+
+    // Dictation and live mode both need the microphone, so one prompt serves both.
+    var afterMicrophoneGrant: (() -> Unit)? by remember { mutableStateOf(null) }
+    val microphonePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val awaiting = afterMicrophoneGrant
+        afterMicrophoneGrant = null
+        if (granted) {
+            AgentService.refreshForegroundTypes()
+            awaiting?.invoke()
+        } else {
+            notice = "Microphone access is needed to talk to the assistant."
         }
     }
 
@@ -181,12 +205,20 @@ fun ChatScreen(
             PackageManager.PERMISSION_GRANTED
         if (!granted) {
             notice = "Microphone access is needed to record a voice note."
+            afterRecordPermission = { startRecording() }
             recordPermission.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
         // The recogniser and the recorder cannot both hold the microphone, so dictation yields.
         if (listening) voice.stopListening()
-        notice = if (recorder.start()) null else "The microphone is busy — nothing was recorded."
+        // Live mode keeps the recognition loop running; it waits until the note is done.
+        engine.pauseLiveListening(ChatEngine.LivePause.VOICE_NOTE)
+        if (recorder.start()) {
+            notice = null
+        } else {
+            notice = "The microphone is busy — nothing was recorded."
+            engine.resumeLiveListening(ChatEngine.LivePause.VOICE_NOTE)
+        }
     }
 
     fun sendRecording() {
@@ -205,16 +237,57 @@ fun ChatScreen(
         }
     }
 
+    /** Ends a capture and gives the microphone back to live mode when it is on. */
+    fun finishRecording(keep: Boolean) {
+        if (keep) {
+            sendRecording()
+        } else {
+            recorder.cancel()
+        }
+        engine.resumeLiveListening(ChatEngine.LivePause.VOICE_NOTE)
+    }
+
+    /** Runs [action] now when the microphone is allowed, otherwise asks for it first. */
+    fun withMicrophone(action: () -> Unit) {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            action()
+        } else {
+            afterMicrophoneGrant = action
+            microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    /** The dictation button: stop an open session, otherwise open one once the permission is there. */
+    fun toggleDictation() {
+        if (listening) {
+            voice.stopListening()
+        } else {
+            withMicrophone { voice.startListening() }
+        }
+    }
+
+    /** The live-mode button: the microphone has to be allowed before a conversation can start. */
+    fun toggleLiveMode() {
+        if (liveMode) {
+            engine.toggleLiveMode()
+        } else {
+            withMicrophone { engine.toggleLiveMode() }
+        }
+    }
+
     // Follow new turns as they arrive; the engine loads the persisted transcript at startup.
     // (ChatEngine.refresh() is deliberately not called from here: it re-opens the newest
     // conversation and cancels an in-flight reply, which would lose work on a tab switch.)
     LaunchedEffect(messages.size, streaming) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
-    // A finished dictation lands in the input box so the user can review it before sending.
-    LaunchedEffect(voice) {
+    // A finished dictation lands in the input box so the user can review it before sending. In live
+    // mode the engine handles the utterance itself, so the box stays empty.
+    LaunchedEffect(voice, liveMode) {
         voice.heard.collect { utterance ->
-            if (utterance.isNotBlank()) draft = utterance
+            if (utterance.isNotBlank() && !liveMode) draft = utterance
         }
     }
 
@@ -276,7 +349,7 @@ fun ChatScreen(
                     )
                 }
             }
-            IconButton(onClick = { engine.toggleLiveMode() }) {
+            IconButton(onClick = { toggleLiveMode() }) {
                 Icon(
                     imageVector = Icons.Filled.RecordVoiceOver,
                     contentDescription = if (liveMode) "Turn live mode off" else "Turn live mode on",
@@ -450,7 +523,9 @@ fun ChatScreen(
         }
 
         // A missing permission, an unreadable picture or an empty recording: said inline, once.
+        // A refusal from the voice layer (no permission, no recogniser) is shown the same way.
         val visibleNotice = notice?.takeIf { it.isNotBlank() }
+            ?: voiceNotice.takeIf { it.isNotBlank() }
         if (visibleNotice != null) {
             Text(
                 text = visibleNotice,
@@ -481,10 +556,10 @@ fun ChatScreen(
             RecordingBar(
                 elapsedMs = elapsedMs,
                 onCancel = {
-                    recorder.cancel()
+                    finishRecording(keep = false)
                     notice = null
                 },
-                onSend = { sendRecording() },
+                onSend = { finishRecording(keep = true) },
             )
         } else {
             Row(
@@ -522,14 +597,17 @@ fun ChatScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                IconButton(
-                    onClick = { if (listening) voice.stopListening() else voice.startListening() },
-                ) {
-                    Icon(
-                        imageVector = if (listening) Icons.Filled.MicOff else Icons.Filled.Mic,
-                        contentDescription = if (listening) "Stop dictating" else "Dictate a message",
-                        tint = if (listening) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                // Live mode owns the microphone; a separate dictation button would only fight it.
+                if (!liveMode) {
+                    IconButton(
+                        onClick = { toggleDictation() },
+                    ) {
+                        Icon(
+                            imageVector = if (listening) Icons.Filled.MicOff else Icons.Filled.Mic,
+                            contentDescription = if (listening) "Stop dictating" else "Dictate a message",
+                            tint = if (listening) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 IconButton(
                     onClick = { if (streaming) engine.cancel() else submit() },

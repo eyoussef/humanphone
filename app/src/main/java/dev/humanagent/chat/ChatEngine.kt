@@ -20,6 +20,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -190,7 +192,64 @@ class ChatEngine(
         }
     }
 
+    /**
+     * Who has taken the microphone away from a live conversation. Pauses are counted by reason:
+     * the loop only starts listening again once the last one is released.
+     */
+    enum class LivePause(
+        /** True when releasing this reason hands new work (a reply or a phone task) to the engine. */
+        val handsOverWork: Boolean,
+    ) {
+        /** A voice note is being recorded in the chat. */
+        VOICE_NOTE(handsOverWork = true),
+
+        /** The agent screen is dictating a command. */
+        DICTATION(handsOverWork = true),
+
+        /** The dot is dictating a command over another app. */
+        BUBBLE(handsOverWork = true),
+
+        /** The app is not on screen, so nothing should hold the microphone. */
+        BACKGROUND(handsOverWork = false),
+    }
+
+    private val livePauses = mutableSetOf<LivePause>()
+
+    /**
+     * Hands the microphone over to another capture, such as a voice note or a dictation started on
+     * the agent screen: the live loop stops listening until the same [reason] is released, so one
+     * utterance cannot be transcribed twice. Live mode itself stays on.
+     */
+    fun pauseLiveListening(reason: LivePause) {
+        livePauses += reason
+        if (!_liveMode.value) return
+        liveJob?.cancel()
+        liveJob = null
+        voice.stopListening()
+    }
+
+    /**
+     * Releases [reason] and, when nothing else holds the microphone, listens again — after the
+     * assistant has finished speaking, so the recogniser does not transcribe its own voice.
+     */
+    fun resumeLiveListening(reason: LivePause) {
+        livePauses -= reason
+        if (!_liveMode.value || liveJob != null || livePauses.isNotEmpty()) return
+        // Someone else (the dot, another dictation) is on the microphone: leave it alone.
+        if (voice.isListening.value) return
+        scope.launch {
+            // Work this reason just handed over is only registered a moment later.
+            if (reason.handsOverWork) awaitWorkAppears()
+            awaitQuiet()
+            if (_liveMode.value && liveJob == null && livePauses.isEmpty() && !voice.isListening.value) {
+                startLiveLoop()
+            }
+        }
+    }
+
     private fun startLiveLoop() {
+        // Someone else is on the microphone; the loop waits until they release it.
+        if (livePauses.isNotEmpty()) return
         liveJob?.cancel()
         liveJob = scope.launch {
             voice.heard.collect { utterance ->
@@ -199,21 +258,39 @@ class ChatEngine(
                 if (heard.isEmpty() || _streaming.value) return@collect
                 send(heard)
                 job?.join()
-                awaitSpeechEnd()
-                if (_liveMode.value) voice.startListening()
+                // Wait for the spoken reply before opening the microphone again.
+                awaitQuiet()
+                if (_liveMode.value && livePauses.isEmpty()) voice.startListening()
             }
         }
         voice.startListening()
     }
 
     /**
-     * Waits for the spoken reply to finish before opening the microphone again, otherwise the
-     * recogniser would transcribe the assistant's own voice.
+     * Gives a reply or a phone task that was handed over moments ago time to register, watching both
+     * at once. Without it [awaitQuiet] would look at an engine that is still idle and let the
+     * microphone open in front of the answer that is on its way.
      */
-    private suspend fun awaitSpeechEnd() {
-        // TTS needs a moment to spin up; waiting for it to start first avoids recording our own voice.
-        withTimeoutOrNull(3_000L) { speaker.speaking.first { it } }
-        withTimeoutOrNull(30_000L) { speaker.speaking.first { !it } }
+    private suspend fun awaitWorkAppears() = coroutineScope {
+        val streaming = async { withTimeoutOrNull(START_GRACE_MS) { _streaming.first { it } } }
+        val phoneTask = async { withTimeoutOrNull(START_GRACE_MS) { AgentService.loop.first { it.running } } }
+        streaming.await()
+        phoneTask.await()
+        Unit
+    }
+
+    /**
+     * Waits until the assistant is quiet before the microphone opens again: a reply that is still
+     * streaming, a phone task still running, and then the voice those produce. Without it the
+     * recogniser transcribes the assistant's own words and answers them.
+     */
+    private suspend fun awaitQuiet() {
+        withTimeoutOrNull(REPLY_WAIT_MS) { _streaming.first { !it } }
+        withTimeoutOrNull(REPLY_WAIT_MS) { AgentService.loop.first { !it.running } }
+        if (!settingsStore.current().speakReplies) return
+        // The utterance is posted moments before this point, so a short window catches it.
+        withTimeoutOrNull(SPEECH_START_GRACE_MS) { speaker.speaking.first { it } }
+        withTimeoutOrNull(SPEECH_END_MS) { speaker.speaking.first { !it } }
     }
 
     private suspend fun respond() {
@@ -349,7 +426,7 @@ class ChatEngine(
     private fun snapshot(): List<Conversation> {
         val id = _activeId.value
         val turns = _messages.value
-        val title = ConversationStore.titleFor(turns.firstOrNull { it.role == ROLE_USER }?.text.orEmpty())
+        val title = ConversationStore.titleFor(turns.firstOrNull { it.role == ROLE_USER })
         val active = Conversation(id, title, System.currentTimeMillis(), turns)
         val others = _conversations.value.filterNot { it.id == id }
         return listOf(active) + others
@@ -363,6 +440,18 @@ class ChatEngine(
         private const val ROLE_USER = "user"
         private const val ROLE_ASSISTANT = "assistant"
         private const val HISTORY_TURNS = 24
+
+        /** How long a resume waits for a reply that is about to be spoken before giving up on it. */
+        private const val SPEECH_START_GRACE_MS = 1_000L
+
+        /** Window for work handed over a moment ago to register before it is waited for. */
+        private const val START_GRACE_MS = 1_000L
+
+        /** Ceiling for a spoken reply to finish before the microphone reopens. */
+        private const val SPEECH_END_MS = 30_000L
+
+        /** Ceiling for a reply or a phone task to finish before the microphone reopens. */
+        private const val REPLY_WAIT_MS = 90_000L
 
         /**
          * The one tool the chat half owns: when the model calls it, the words stop and the operator

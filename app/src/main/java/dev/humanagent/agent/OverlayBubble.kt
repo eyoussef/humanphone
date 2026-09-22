@@ -41,8 +41,11 @@ class OverlayBubble(
         main.post {
             val manager = windowManager ?: return@post
             val density = context.resources.displayMetrics.density
-            val size = (56 * density).toInt()
+            val dotSize = (56 * density).toInt()
             val badgeSize = (20 * density).toInt()
+            // The window is a little larger than the dot so the close badge sits in a corner of its
+            // own: tapping the dot never lands on it by accident.
+            val windowSize = dotSize + badgeSize / 2
 
             val bubbleView = TextView(context).apply {
                 text = "HP"
@@ -68,13 +71,13 @@ class OverlayBubble(
                 setOnClickListener { onClose() }
             }
             val root = FrameLayout(context).apply {
-                addView(bubbleView, FrameLayout.LayoutParams(size, size, Gravity.TOP or Gravity.START))
+                addView(bubbleView, FrameLayout.LayoutParams(dotSize, dotSize, Gravity.BOTTOM or Gravity.START))
                 addView(close, FrameLayout.LayoutParams(badgeSize, badgeSize, Gravity.TOP or Gravity.END))
             }
 
             val layoutParams = WindowManager.LayoutParams(
-                size,
-                size,
+                windowSize,
+                windowSize,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
@@ -124,9 +127,13 @@ class OverlayBubble(
                         val dy = event.rawY - startY
                         if (!dragging && (abs(dx) > slop || abs(dy) > slop)) dragging = true
                         if (dragging) {
+                            val metrics = context.resources.displayMetrics
                             layoutParams.x = (originX + dx).toInt()
+                                .coerceIn(0, (metrics.widthPixels - windowSize).coerceAtLeast(0))
                             layoutParams.y = (originY + dy).toInt()
-                            runCatching { manager.updateViewLayout(bubbleView, layoutParams) }
+                                .coerceIn(0, (metrics.heightPixels - windowSize).coerceAtLeast(0))
+                            // The window belongs to the frame layout, so that is what moves.
+                            runCatching { manager.updateViewLayout(root, layoutParams) }
                         }
                     }
 

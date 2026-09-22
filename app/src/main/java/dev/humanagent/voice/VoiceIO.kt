@@ -60,6 +60,17 @@ class VoiceIO(private val context: Context) {
     /** BCP-47 tag the recognizer is asked to listen for; empty means the device default. */
     val language: StateFlow<String> = _language.asStateFlow()
 
+    private val _notice = MutableStateFlow("")
+
+    /**
+     * Why the last [startListening] could not listen: a missing microphone permission, a device
+     * without a recognition service, or empty when dictation is usable. Cleared by the next session
+     * that starts.
+     */
+    val notice: StateFlow<String> = _notice.asStateFlow()
+
+    private var preferOffline = false
+
     private var recognizer: SpeechRecognizer? = null
     private var listeningRequested = false
     private var restart: Runnable? = null
@@ -127,8 +138,18 @@ class VoiceIO(private val context: Context) {
                 cancelRestart()
                 _partial.value = ""
                 _isListening.value = false
+                _notice.value = NO_PERMISSION
                 return@onMainThread
             }
+            if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+                listeningRequested = false
+                cancelRestart()
+                _partial.value = ""
+                _isListening.value = false
+                _notice.value = NO_RECOGNISER
+                return@onMainThread
+            }
+            _notice.value = ""
             listeningRequested = true
             cancelRestart()
             beginListening()
@@ -159,6 +180,14 @@ class VoiceIO(private val context: Context) {
         onMainThread { _language.value = tag }
     }
 
+    /**
+     * Asks the recogniser to work without a network connection when the installed service supports
+     * it. Takes effect on the next session.
+     */
+    fun setPreferOffline(offline: Boolean) {
+        onMainThread { preferOffline = offline }
+    }
+
     /** Releases the recognizer. This instance cannot be used afterwards. */
     fun destroy() {
         onMainThread {
@@ -166,6 +195,7 @@ class VoiceIO(private val context: Context) {
             cancelRestart()
             _partial.value = ""
             _isListening.value = false
+            _notice.value = ""
             val active = recognizer
             recognizer = null
             if (active != null) {
@@ -217,7 +247,7 @@ class VoiceIO(private val context: Context) {
     private fun buildIntent(): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
         val tag = _language.value
         if (tag.isNotBlank()) putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag)
     }
@@ -240,5 +270,9 @@ class VoiceIO(private val context: Context) {
 
     private companion object {
         const val RESTART_DELAY_MS = 300L
+        const val NO_PERMISSION = "Microphone access is needed for dictation — allow it in Settings."
+        const val NO_RECOGNISER =
+            "This phone has no speech recognition service, so dictation cannot run. " +
+                "Install one (for example Google) or type your message."
     }
 }

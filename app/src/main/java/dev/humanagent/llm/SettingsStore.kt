@@ -31,6 +31,12 @@ data class AppSettings(
     val sttLanguage: String = "",
     /** BCP-47 tag for speech synthesis, empty means the device default. */
     val ttsLanguage: String = "",
+    /** How fast replies are spoken, 0.5 (slow) to 2.0 (fast). */
+    val ttsSpeechRate: Float = 1.0f,
+    /** Voice pitch for spoken replies, 0.5 (deep) to 2.0 (high). */
+    val ttsPitch: Float = 1.0f,
+    /** Asks the recogniser to transcribe without a network connection when it can. */
+    val sttPreferOffline: Boolean = false,
     /** Whether the floating assistant dot is shown. */
     val showBubble: Boolean = true,
     /** Hands-free conversation: keep listening after every spoken reply. */

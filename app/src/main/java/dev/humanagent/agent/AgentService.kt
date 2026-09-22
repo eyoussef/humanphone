@@ -1,5 +1,6 @@
 package dev.humanagent.agent
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -16,6 +18,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dev.humanagent.HumanPhoneApp
 import dev.humanagent.MainActivity
+import dev.humanagent.chat.ChatEngine
 import dev.humanagent.util.Markdown
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +29,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -39,6 +43,15 @@ class AgentService : Service() {
     private var engine: AgentLoop? = null
     private var bubble: OverlayBubble? = null
     private var listenJob: Job? = null
+
+    /** Set when the dot was closed during a task, so the service stops as soon as the task ends. */
+    private var stopWhenIdle = false
+
+    /** Last status line shown in the notification, reused when the foreground types are re-claimed. */
+    private var lastStatus = "Ready when you are."
+
+    /** Types the running foreground notification was declared with, so they are only re-claimed once. */
+    private var claimedTypes = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,12 +78,21 @@ class AgentService : Service() {
                         }
                     )
                 )
+                // The dot was closed while a task was still running: now that it is done there is
+                // nothing left for the service to keep alive.
+                if (stopWhenIdle && !state.running) {
+                    stopWhenIdle = false
+                    stopSelf()
+                }
             }
         }
 
         scope.launch {
             app.settingsStore.settings.collect { settings ->
                 if (settings.showBubble && Settings.canDrawOverlays(this@AgentService)) {
+                    // The dot is wanted again, so a dismissal during an earlier task no longer ends
+                    // the service when that task finishes.
+                    stopWhenIdle = false
                     installBubble()
                 } else {
                     bubble?.hide()
@@ -92,6 +114,11 @@ class AgentService : Service() {
         listenJob?.cancel()
         engine?.shutdown()
         bubble?.hide()
+        // Whatever happens next, the dot must not report a service that is no longer there.
+        _running.value = false
+        _loop.update { it.copy(running = false, liveText = "") }
+        // A dictation the dot owned is over, so live mode gets the microphone back.
+        runCatching { HumanPhoneApp.instance.chatEngine.resumeLiveListening(ChatEngine.LivePause.BUBBLE) }
         scope.cancel()
         instance = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -108,11 +135,19 @@ class AgentService : Service() {
         ).also { it.show() }
     }
 
-    /** The user closed the dot: take it away now and remember the choice for the next start. */
+    /** The user closed the dot: take it away, remember the choice and let the service go too. */
     private fun dismissBubble() {
         bubble?.hide()
         bubble = null
         scope.launch { HumanPhoneApp.instance.settingsStore.update { it.copy(showBubble = false) } }
+        // The dot is the service's main reason to run. A task that is still working keeps it alive;
+        // otherwise the foreground notification goes away with the dot.
+        if (engine?.state?.value?.running == true) {
+            stopWhenIdle = true
+            notifyStatus("Dot hidden — the running task continues. Turn the dot back on in Settings.")
+        } else {
+            stopSelf()
+        }
     }
 
     private fun openApp() {
@@ -128,26 +163,78 @@ class AgentService : Service() {
         val app = HumanPhoneApp.instance
         listenJob?.cancel()
         bubble?.setLabel("🎙")
+        // A live conversation hands the microphone over while the dot dictates.
+        app.chatEngine.pauseLiveListening(ChatEngine.LivePause.BUBBLE)
         app.voice.startListening()
         listenJob = scope.launch {
+            // A missing permission or a device without a recogniser must not end in silence.
+            val blocked = app.voice.notice.value
+            if (blocked.isNotBlank()) {
+                bubble?.setLabel("HP")
+                notifyStatus(blocked)
+                app.chatEngine.resumeLiveListening(ChatEngine.LivePause.BUBBLE)
+                return@launch
+            }
             val heard = withTimeoutOrNull(LISTEN_TIMEOUT_MS) { app.voice.heard.first() }
             app.voice.stopListening()
             bubble?.setLabel("HP")
             if (!heard.isNullOrBlank()) engine?.run(heard)
+            app.chatEngine.resumeLiveListening(ChatEngine.LivePause.BUBBLE)
         }
     }
 
     private fun startInForeground(text: String) {
         createChannel()
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        lastStatus = text
+        val notification = buildNotification(text)
+        val types = foregroundTypes()
+        val started = runCatching {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, types)
+        }.isSuccess
+        if (started) {
+            claimedTypes = types
+            return
+        }
+        // The microphone type is refused when the service is (re)started from the background; the
+        // status notification still has to appear, so only the plain type is retried.
+        val fallback = specialUseType()
+        runCatching {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, fallback)
+        }
+        claimedTypes = fallback
+    }
+
+    /** Re-claims the foreground types when the microphone permission appeared since service start. */
+    private fun refreshForegroundTypes() {
+        if (foregroundTypes() == claimedTypes) return
+        startInForeground(lastStatus)
+    }
+
+    /**
+     * Foreground-service types for this service: special use always, and the microphone as well
+     * once the user allowed it, which is what Android asks for before a background service may
+     * hand audio to the recogniser on the dot's long-press.
+     */
+    private fun foregroundTypes(): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return specialUseType()
+        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+        return types
+    }
+
+    private fun specialUseType(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         } else {
             0
         }
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(text), type)
-    }
 
     private fun notifyStatus(text: String) {
+        lastStatus = text
         runCatching {
             getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, buildNotification(text))
         }
@@ -221,6 +308,23 @@ class AgentService : Service() {
 
         fun stop(context: Context) {
             runCatching { context.stopService(Intent(context, AgentService::class.java)) }
+        }
+
+        /**
+         * Brings the running service in line with the stored dot preference: it is started when the
+         * dot should be visible again and stopped when the user turned it off.
+         */
+        fun syncBubble(context: Context, enabled: Boolean) {
+            if (enabled) start(context) else stop(context)
+        }
+
+        /**
+         * Re-claims the foreground-service types when the microphone permission appeared after the
+         * service was already running. Only effective while the app is in the foreground, which is
+         * when Android accepts the microphone type.
+         */
+        fun refreshForegroundTypes() {
+            instance?.refreshForegroundTypes()
         }
 
         /** Hands a task to the assistant, starting the service when it is not up yet. */
