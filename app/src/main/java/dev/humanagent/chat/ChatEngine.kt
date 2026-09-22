@@ -14,6 +14,7 @@ import dev.humanagent.util.ImagePrep
 import dev.humanagent.util.JsonArgs
 import dev.humanagent.util.Markdown
 import dev.humanagent.voice.Speaker
+import dev.humanagent.voice.Transcriber
 import dev.humanagent.voice.VoiceIO
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -48,6 +49,7 @@ class ChatEngine(
 ) {
 
     private val store = ConversationStore(File(context.filesDir, "conversations.json"))
+    private val transcriber = Transcriber()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -150,19 +152,94 @@ class ChatEngine(
         job = scope.launch { respond() }
     }
 
-    /** Sends a recorded voice note; it is kept in the transcript and marked for the model. */
+    /** Sends a recorded voice note: what the model reads is its transcript. */
     fun sendVoiceNote(path: String) {
         if (_streaming.value) return
-        append(ChatTurn(ROLE_USER, "", now(), audioPath = path))
         _error.value = null
+        // The note is already in: a second send waits for the transcript and the reply.
+        _streaming.value = true
+        val turn = ChatTurn(ROLE_USER, "", now(), audioPath = path)
+        append(turn)
         persist()
-        job = scope.launch { respond() }
+        job = scope.launch {
+            if (transcribeInto(turn) == null) {
+                _streaming.value = false
+                return@launch
+            }
+            respond()
+        }
     }
 
     /** Keeps a voice note in the transcript without asking the model anything. */
     fun attachVoiceNote(path: String) {
-        append(ChatTurn(ROLE_USER, "", now(), audioPath = path))
+        val turn = ChatTurn(ROLE_USER, "", now(), audioPath = path)
+        append(turn)
         persist()
+        // The transcript still arrives, so the words are there when the chat is picked up again.
+        scope.launch { transcribeInto(turn) }
+    }
+
+    /**
+     * Fills a voice note's bubble with the words it holds, which is also what the model gets to read:
+     * a recording it cannot hear is worth nothing in the history. Without an endpoint, or when the
+     * endpoint fails, the note stays in place and the reason is shown instead of guessing.
+     */
+    private suspend fun transcribeInto(turn: ChatTurn): String? {
+        val audioPath = turn.audioPath ?: return null
+        val config = settingsStore.current().toSttConfig()
+        if (!config.isConfigured) {
+            _error.value = "Voice notes are not transcribed yet — set the speech-to-text endpoint in " +
+                "Settings (Groq, OpenAI or a whisper server)."
+            return null
+        }
+        val result = transcriber.transcribe(config, File(audioPath))
+        val words = result.getOrNull()
+        if (words == null) {
+            _error.value = "Could not transcribe the voice note: " +
+                (result.exceptionOrNull()?.message ?: "the endpoint gave no reason")
+            return null
+        }
+        setTurnText(turn.timestampMs, words)
+        persist()
+        return words
+    }
+
+    /** Writes the transcript into the bubble it belongs to, leaving the turns after it alone. */
+    private fun setTurnText(timestampMs: Long, text: String) {
+        _messages.update { turns ->
+            turns.map { turn ->
+                if (turn.role == ROLE_USER && turn.timestampMs == timestampMs) turn.copy(text = text) else turn
+            }
+        }
+    }
+
+    /** Deletes a chat with its media and moves to the newest one left, or to a fresh chat. */
+    fun deleteConversation(id: String) {
+        val removed = _conversations.value.firstOrNull { it.id == id } ?: return
+        val remaining = _conversations.value.filterNot { it.id == id }
+        _conversations.value = remaining
+        if (_activeId.value == id) {
+            // Leave the deleted chat before anything is saved, or persisting would write it back.
+            val next = ConversationStore.newestAfterRemoving(remaining, id)
+            if (next == null) newConversation() else openConversation(next.id)
+        }
+        persist()
+        releaseMediaOf(removed, remaining)
+    }
+
+    /**
+     * The pictures and recordings of a deleted chat go with it, unless a turn that is still listed
+     * points at the same file — that is what keeps a shared attachment alive.
+     */
+    private fun releaseMediaOf(removed: Conversation, remaining: List<Conversation>) {
+        val kept = remaining.flatMap { it.turns }
+            .flatMap { it.imagePaths + listOfNotNull(it.audioPath) }
+            .toSet()
+        val orphans = removed.turns
+            .flatMap { it.imagePaths + listOfNotNull(it.audioPath) }
+            .filterNot { it in kept }
+        if (orphans.isEmpty()) return
+        scope.launch(Dispatchers.IO) { orphans.forEach { path -> runCatching { File(path).delete() } } }
     }
 
     /** Flips live mode, remembers it and starts or stops listening. */
@@ -301,6 +378,7 @@ class ChatEngine(
         val config = settings.toProviderConfig()
         if (!config.isUsable) {
             _error.value = "Configure the model in Settings first (OpenRouter key, or an Ollama address)."
+            _streaming.value = false
             return
         }
         _streaming.value = true
@@ -400,8 +478,8 @@ class ChatEngine(
         append("instead of describing the steps. Answer in words only for things you can answer yourself.\n")
         append("- Keep replies short, warm and spoken-friendly: they may be read out loud.\n")
         append("- Write plain conversational text: never use markdown asterisks, hashes, tables or bullet symbols.\n")
-        append("- A message marked \"[voice note]\" is a recording you cannot hear: answer in one short line, ")
-        append("say you cannot play audio, and ask them to dictate it with the microphone or type it instead.\n")
+        append("- Voice notes arrive as their transcript. If a message is marked \"[voice note]\" it has no ")
+        append("words yet: say in one short line that you could not read the recording and ask for the words.\n")
         val notes = memory.snapshot()
         if (notes.isNotEmpty()) {
             append("\nWhat you remember about this user:\n")

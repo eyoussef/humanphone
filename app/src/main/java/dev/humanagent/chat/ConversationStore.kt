@@ -70,6 +70,13 @@ class ConversationStore(
         }
 
         /**
+         * The chat to show once [id] is gone: the most recently used one left, or null when the
+         * deleted chat was the only one and a fresh one has to take its place.
+         */
+        fun newestAfterRemoving(conversations: List<Conversation>, id: String): Conversation? =
+            conversations.filterNot { it.id == id }.maxByOrNull { it.updatedAtMs }
+
+        /**
          * Title for the conversation opened with [turn]: its words when it has any, and otherwise
          * what was attached — a voice note opener must not read as an empty "New chat".
          */

@@ -101,6 +101,9 @@ fun SettingsScreen(settingsStore: SettingsStore) {
     var stepDelay by remember(loaded.stepDelayMs) { mutableStateOf(loaded.stepDelayMs.toFloat()) }
     var speechRate by remember(loaded.ttsSpeechRate) { mutableStateOf(loaded.ttsSpeechRate) }
     var pitch by remember(loaded.ttsPitch) { mutableStateOf(loaded.ttsPitch) }
+    var sttBaseUrl by remember(loaded.sttBaseUrl) { mutableStateOf(loaded.sttBaseUrl) }
+    var sttApiKey by remember(loaded.sttApiKey) { mutableStateOf(loaded.sttApiKey) }
+    var sttModel by remember(loaded.sttModel) { mutableStateOf(loaded.sttModel) }
 
     fun write(transform: (AppSettings) -> AppSettings) {
         scope.launch { settingsStore.update(transform) }
@@ -327,6 +330,51 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                 steps = 14,
                 onValueChange = { pitch = it },
                 onValueChangeFinished = { write { it.copy(ttsPitch = pitch) } },
+            )
+        }
+
+        SectionCard(title = "Voice notes") {
+            OutlinedTextField(
+                value = sttBaseUrl,
+                onValueChange = { value ->
+                    sttBaseUrl = value
+                    write { it.copy(sttBaseUrl = value) }
+                },
+                label = { Text("Speech-to-text endpoint") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = {
+                    Text(
+                        "Root of an OpenAI-compatible /audio/transcriptions service — Groq, OpenAI or a " +
+                            "whisper server on this phone. Empty leaves voice notes untranscribed.",
+                    )
+                },
+            )
+            OutlinedTextField(
+                value = sttApiKey,
+                onValueChange = { value ->
+                    // An API key is one line: a pasted line break is dropped instead of stored.
+                    val clean = value.filterNot { it == '\n' || it == '\r' }
+                    sttApiKey = clean
+                    write { it.copy(sttApiKey = clean) }
+                },
+                label = { Text("Speech-to-text API key") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = { Text("Only a hosted service needs one; a server on this phone does not.") },
+            )
+            OutlinedTextField(
+                value = sttModel,
+                onValueChange = { value ->
+                    sttModel = value
+                    write { it.copy(sttModel = value) }
+                },
+                label = { Text("Transcription model") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = { Text("For example whisper-1, or whisper-large-v3-turbo on Groq.") },
             )
         }
 

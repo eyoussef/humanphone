@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import dev.humanagent.voice.SttConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -37,6 +38,12 @@ data class AppSettings(
     val ttsPitch: Float = 1.0f,
     /** Asks the recogniser to transcribe without a network connection when it can. */
     val sttPreferOffline: Boolean = false,
+    /** Root of the OpenAI-compatible endpoint that transcribes voice notes; empty turns it off. */
+    val sttBaseUrl: String = "",
+    /** Credential for [sttBaseUrl]; a transcription server on the phone itself needs none. */
+    val sttApiKey: String = "",
+    /** Model the transcription endpoint answers with, such as whisper-1. */
+    val sttModel: String = "whisper-1",
     /** Whether the floating assistant dot is shown. */
     val showBubble: Boolean = true,
     /** Hands-free conversation: keep listening after every spoken reply. */
@@ -49,6 +56,13 @@ data class AppSettings(
         model = model,
         temperature = temperature,
         maxTokens = maxTokens,
+    )
+
+    fun toSttConfig(): SttConfig = SttConfig(
+        baseUrl = sttBaseUrl,
+        apiKey = sttApiKey,
+        model = sttModel,
+        language = sttLanguage,
     )
 
     companion object {
@@ -94,4 +108,7 @@ internal fun AppSettings.cleaned(): AppSettings = copy(
     apiKey = apiKey.headerSafe(),
     baseUrl = baseUrl.trim(),
     model = model.trim(),
+    sttApiKey = sttApiKey.headerSafe(),
+    sttBaseUrl = sttBaseUrl.trim(),
+    sttModel = sttModel.trim(),
 )

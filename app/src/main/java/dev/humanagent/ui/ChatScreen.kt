@@ -17,6 +17,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
@@ -57,6 +59,7 @@ import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -66,6 +69,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -93,6 +97,7 @@ import dev.humanagent.HumanPhoneApp
 import dev.humanagent.agent.AgentService
 import dev.humanagent.chat.ChatEngine
 import dev.humanagent.chat.ChatTurn
+import dev.humanagent.chat.Conversation
 import dev.humanagent.util.ImagePrep
 import dev.humanagent.voice.Speaker
 import dev.humanagent.voice.VoiceIO
@@ -136,6 +141,8 @@ fun ChatScreen(
     var draft by remember { mutableStateOf("") }
     var pending by remember { mutableStateOf<List<String>>(emptyList()) }
     var notice by remember { mutableStateOf<String?>(null) }
+    /** The chat whose delete icon was tapped, held until the user confirms the removal. */
+    var pendingDelete by remember { mutableStateOf<Conversation?>(null) }
 
     // One recorder and one player serve the whole screen; both are released when it leaves
     // composition (VoiceIO.destroy() belongs to the voice slice and is none of our business).
@@ -419,9 +426,46 @@ fun ChatScreen(
                                 modifier = Modifier.widthIn(max = 160.dp),
                             )
                         },
+                        trailingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Delete,
+                                contentDescription = "Delete ${conversation.title.ifBlank { "untitled chat" }}",
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clickable { pendingDelete = conversation },
+                            )
+                        },
                     )
                 }
             }
+        }
+
+        pendingDelete?.let { target ->
+            AlertDialog(
+                onDismissRequest = { pendingDelete = null },
+                title = { Text("Delete this chat?") },
+                text = {
+                    Text(
+                        "\"${target.title.ifBlank { "Untitled chat" }}\" and its pictures and voice notes " +
+                            "are removed from the phone for good."
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            engine.deleteConversation(target.id)
+                            pendingDelete = null
+                        },
+                    ) {
+                        Text("Delete")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDelete = null }) {
+                        Text("Keep")
+                    }
+                },
+            )
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

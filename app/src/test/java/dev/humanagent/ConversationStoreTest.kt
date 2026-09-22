@@ -6,6 +6,7 @@ import dev.humanagent.chat.ConversationStore
 import java.io.File
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,6 +54,19 @@ class ConversationStoreTest {
     fun missingFileReadsAsEmpty() = runTest {
         val file = File(System.getProperty("java.io.tmpdir"), "humanphone-does-not-exist-${System.nanoTime()}.json")
         assertTrue(store(file).load().isEmpty())
+    }
+
+    @Test
+    fun theChatToShowAfterADeletionIsTheNewestOneLeft() {
+        val chats = listOf(
+            Conversation("c3", "newest", 30L, emptyList()),
+            Conversation("c2", "middle", 20L, emptyList()),
+            Conversation("c1", "oldest", 10L, emptyList()),
+        )
+
+        assertEquals("c3", ConversationStore.newestAfterRemoving(chats, "c2")?.id)
+        assertEquals("c2", ConversationStore.newestAfterRemoving(chats, "c3")?.id)
+        assertNull(ConversationStore.newestAfterRemoving(chats.take(1), "c3"))
     }
 
     @Test
