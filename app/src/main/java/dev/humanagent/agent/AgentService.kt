@@ -68,6 +68,7 @@ class AgentService : Service() {
             loop.state.collect { state ->
                 _loop.value = state
                 _running.value = state.running
+                if (state.running) _pendingRun.value = false
                 bubble?.setLabel(if (state.running) "•••" else "HP")
                 notifyStatus(
                     Markdown.singleLine(
@@ -116,6 +117,7 @@ class AgentService : Service() {
         bubble?.hide()
         // Whatever happens next, the dot must not report a service that is no longer there.
         _running.value = false
+        _pendingRun.value = false
         _loop.update { it.copy(running = false, liveText = "") }
         // A dictation the dot owned is over, so live mode gets the microphone back.
         runCatching { HumanPhoneApp.instance.chatEngine.resumeLiveListening(ChatEngine.LivePause.BUBBLE) }
@@ -296,6 +298,15 @@ class AgentService : Service() {
         private val _running = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _running.asStateFlow()
 
+        private val _pendingRun = MutableStateFlow(false)
+
+        /**
+         * True from the moment a task is handed over by [run] until the loop reports that it is
+         * running. It is what lets a caller that just started a task wait for it without racing the
+         * service start-up.
+         */
+        val pendingRun: StateFlow<Boolean> = _pendingRun.asStateFlow()
+
         @Volatile
         private var instance: AgentService? = null
 
@@ -329,14 +340,19 @@ class AgentService : Service() {
 
         /** Hands a task to the assistant, starting the service when it is not up yet. */
         fun run(context: Context, command: String) {
-            runCatching {
+            // Announced before the service is even asked to start, so a caller that waits for the
+            // task cannot miss it; the loop clears it as soon as the task is running.
+            _pendingRun.value = true
+            val started = runCatching {
                 ContextCompat.startForegroundService(
                     context,
                     Intent(context, AgentService::class.java)
                         .setAction(ACTION_RUN)
                         .putExtra(EXTRA_COMMAND, command),
                 )
-            }
+            }.isSuccess
+            // Nothing will run after a refused start, so nobody should wait for it.
+            if (!started) _pendingRun.value = false
         }
 
         /** Stops the running task but keeps the service and the dot. */

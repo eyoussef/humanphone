@@ -273,7 +273,9 @@ class ChatEngine(
      */
     private suspend fun awaitWorkAppears() = coroutineScope {
         val streaming = async { withTimeoutOrNull(START_GRACE_MS) { _streaming.first { it } } }
-        val phoneTask = async { withTimeoutOrNull(START_GRACE_MS) { AgentService.loop.first { it.running } } }
+        // The phone service announces a handed-over task before it is even up, so the appearance of
+        // a run does not depend on how long the service takes to start.
+        val phoneTask = async { withTimeoutOrNull(START_GRACE_MS) { AgentService.pendingRun.first { it } } }
         streaming.await()
         phoneTask.await()
         Unit
@@ -286,6 +288,7 @@ class ChatEngine(
      */
     private suspend fun awaitQuiet() {
         withTimeoutOrNull(REPLY_WAIT_MS) { _streaming.first { !it } }
+        withTimeoutOrNull(REPLY_WAIT_MS) { AgentService.pendingRun.first { !it } }
         withTimeoutOrNull(REPLY_WAIT_MS) { AgentService.loop.first { !it.running } }
         if (!settingsStore.current().speakReplies) return
         // The utterance is posted moments before this point, so a short window catches it.
