@@ -22,6 +22,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
@@ -31,6 +32,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import dev.humanagent.agent.AgentService
 import dev.humanagent.chat.ChatEngine
+import dev.humanagent.diag.CrashLog
 import dev.humanagent.ui.AgentScreen
 import dev.humanagent.ui.ChatScreen
 import dev.humanagent.ui.HumanPhoneTheme
@@ -54,6 +56,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.mark("MainActivity.onCreate")
 
         // Draw behind the status and navigation bars; the Scaffold adds those insets back.
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -70,6 +73,8 @@ class MainActivity : ComponentActivity() {
         // the user dismissed it with its own close button or switched it off in Settings.
         lifecycleScope.launch {
             val settings = HumanPhoneApp.instance.settingsStore.current()
+            CrashLog.mark("settings loaded: bubble=${settings.showBubble} live=${settings.liveMode}")
+            CrashLog.flush()
             if (settings.showBubble && Settings.canDrawOverlays(this@MainActivity) &&
                 !AgentService.isRunning.value
             ) {
@@ -90,6 +95,9 @@ class MainActivity : ComponentActivity() {
             val tab = tabState.value
             HumanPhoneTheme {
                 val phone = HumanPhoneApp.instance
+                // Reached only when the first composition survived, which is what a crash in the
+                // screens above would otherwise hide.
+                LaunchedEffect(Unit) { CrashLog.mark("chat composed") }
                 Scaffold(
                     bottomBar = {
                         BottomBar(selected = tab, onSelect = { tabState.value = it })
@@ -137,6 +145,13 @@ class MainActivity : ComponentActivity() {
         HumanPhoneApp.instance.chatEngine.resumeLiveListening(ChatEngine.LivePause.BACKGROUND)
         // A microphone type can only be claimed while the app is in the foreground.
         AgentService.refreshForegroundTypes()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Past this line the window is up, so anything above it is where a startup crash happened.
+        CrashLog.mark("resumed with a window")
+        CrashLog.flush()
     }
 
     override fun onStop() {

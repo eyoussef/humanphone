@@ -3,6 +3,7 @@ package dev.humanagent
 import android.app.Application
 import dev.humanagent.agent.MemoryStore
 import dev.humanagent.chat.ChatEngine
+import dev.humanagent.diag.CrashLog
 import dev.humanagent.llm.SettingsStore
 import dev.humanagent.voice.Speaker
 import dev.humanagent.voice.VoiceIO
@@ -29,12 +30,19 @@ class HumanPhoneApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // First, so a failure in anything below still reaches a file the user can hand over.
+        CrashLog.install(this)
         instance = this
         settingsStore = SettingsStore(this)
         memory = MemoryStore(this)
+        CrashLog.mark("settings and memory stores created")
         speaker = Speaker(this)
+        CrashLog.mark("speaker created")
         voice = VoiceIO(this)
+        CrashLog.mark("voice input created")
         chatEngine = ChatEngine(this, settingsStore, speaker, memory, voice)
+        CrashLog.mark("chat engine created")
+        CrashLog.flush()
         scope.launch {
             memory.load()
             chatEngine.refresh()

@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import dev.humanagent.HumanPhoneApp
 import dev.humanagent.MainActivity
 import dev.humanagent.chat.ChatEngine
+import dev.humanagent.diag.CrashLog
 import dev.humanagent.util.Markdown
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +58,7 @@ class AgentService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.mark("agent service created")
         instance = this
         startInForeground("Ready when you are.")
 
@@ -104,6 +106,7 @@ class AgentService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        CrashLog.mark("agent start action=${intent?.action}")
         when (intent?.action) {
             ACTION_HALT -> engine?.halt()
             ACTION_RUN -> intent.getStringExtra(EXTRA_COMMAND)?.let { command -> engine?.run(command) }
@@ -190,20 +193,31 @@ class AgentService : Service() {
         lastStatus = text
         val notification = buildNotification(text)
         val types = foregroundTypes()
-        val started = runCatching {
+        val refusal = runCatching {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, types)
-        }.isSuccess
-        if (started) {
+        }.exceptionOrNull()
+        if (refusal == null) {
             claimedTypes = types
+            CrashLog.mark("foreground claimed types=$types")
             return
         }
         // The microphone type is refused when the service is (re)started from the background; the
         // status notification still has to appear, so only the plain type is retried.
+        CrashLog.mark("foreground types=$types refused: ${refusal.javaClass.simpleName}: ${refusal.message}")
         val fallback = specialUseType()
-        runCatching {
+        val fallbackRefusal = runCatching {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, fallback)
-        }
+        }.exceptionOrNull()
         claimedTypes = fallback
+        CrashLog.mark(
+            if (fallbackRefusal == null) {
+                "foreground claimed types=$fallback"
+            } else {
+                "foreground types=$fallback refused too: " +
+                    "${fallbackRefusal.javaClass.simpleName}: ${fallbackRefusal.message}"
+            }
+        )
+        CrashLog.flush()
     }
 
     /** Re-claims the foreground types when the microphone permission appeared since service start. */
