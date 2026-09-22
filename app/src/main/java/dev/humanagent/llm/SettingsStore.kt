@@ -67,24 +67,31 @@ class SettingsStore(private val context: Context) {
 
     private val key = stringPreferencesKey("settings_json")
 
-    val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
-        prefs[key]?.let { raw ->
-            runCatching { Json.decodeFromString<AppSettings>(raw) }.getOrNull()
-        } ?: AppSettings()
-    }
+    val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs -> decode(prefs).cleaned() }
 
     suspend fun current(): AppSettings = settings.first()
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         context.settingsDataStore.edit { prefs ->
-            val current = prefs[key]?.let { raw ->
-                runCatching { Json.decodeFromString<AppSettings>(raw) }.getOrNull()
-            } ?: AppSettings()
-            prefs[key] = Json.encodeToString(transform(current))
+            prefs[key] = Json.encodeToString(transform(decode(prefs)).cleaned())
         }
     }
+
+    private fun decode(prefs: Preferences): AppSettings = prefs[key]?.let { raw ->
+        runCatching { Json.decodeFromString<AppSettings>(raw) }.getOrNull()
+    } ?: AppSettings()
 
     suspend fun reset() {
         context.settingsDataStore.edit { it.remove(key) }
     }
 }
+
+/**
+ * Whatever is stored, the values that reach a request builder are credentials and endpoints, not free
+ * text: a key or a URL saved with a line break or stray whitespace must not be sent as it is.
+ */
+internal fun AppSettings.cleaned(): AppSettings = copy(
+    apiKey = apiKey.headerSafe(),
+    baseUrl = baseUrl.trim(),
+    model = model.trim(),
+)

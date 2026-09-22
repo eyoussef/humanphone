@@ -218,8 +218,10 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             OutlinedTextField(
                 value = apiKey,
                 onValueChange = { value ->
-                    apiKey = value
-                    write { it.copy(apiKey = value) }
+                    // An API key is one line: a pasted line break is dropped instead of stored.
+                    val clean = value.filterNot { it == '\n' || it == '\r' }
+                    apiKey = clean
+                    write { it.copy(apiKey = clean) }
                 },
                 label = { Text("API key") },
                 singleLine = true,

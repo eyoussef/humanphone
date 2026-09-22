@@ -1,6 +1,7 @@
 package dev.humanagent
 
 import dev.humanagent.llm.AppSettings
+import dev.humanagent.llm.cleaned
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -41,6 +42,21 @@ class AppSettingsTest {
         assertEquals(1.0f, loaded.ttsSpeechRate)
         assertEquals(1.0f, loaded.ttsPitch)
         assertEquals(false, loaded.sttPreferOffline)
+    }
+
+    @Test
+    fun storedCredentialsAreCleanedBeforeTheyReachARequest() {
+        val stored = AppSettings(
+            apiKey = "sk-abc\ndef\n",
+            baseUrl = " http://127.0.0.1:11434/v1 ",
+            model = " some-model ",
+        )
+
+        val cleaned = stored.cleaned()
+
+        assertEquals("sk-abcdef", cleaned.apiKey)
+        assertEquals("http://127.0.0.1:11434/v1", cleaned.baseUrl)
+        assertEquals("some-model", cleaned.model)
     }
 
     @Test

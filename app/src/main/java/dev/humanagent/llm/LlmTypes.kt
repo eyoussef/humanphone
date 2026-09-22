@@ -98,3 +98,9 @@ data class ProviderConfig(
     val isUsable: Boolean
         get() = baseUrl.isNotBlank() && model.isNotBlank() && (!kind.needsApiKey || apiKey.isNotBlank())
 }
+
+/**
+ * A header value cannot carry control characters, and a key is never wrapped in whitespace. Without
+ * this, a key pasted with a line break makes OkHttp throw instead of answering the user.
+ */
+internal fun String.headerSafe(): String = filterNot { it.isISOControl() }.trim()

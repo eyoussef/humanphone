@@ -47,21 +47,15 @@ class LlmClient(
         messages: List<Message>,
         tools: List<ToolSpec> = emptyList(),
     ): Flow<StreamEvent> = callbackFlow {
-        val body = buildRequestBody(messages, tools).toString()
-        val builder = Request.Builder()
-            .url(config.chatCompletionsUrl)
-            .post(body.toRequestBody(JSON_MEDIA))
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-        if (config.apiKey.isNotBlank()) {
-            builder.header("Authorization", "Bearer ${config.apiKey}")
-        }
-        if (config.kind == ProviderKind.OPENROUTER) {
-            builder.header("HTTP-Referer", "https://github.com/humanphone")
-            builder.header("X-Title", "HumanPhone")
+        // A setting the user mistyped (a key with a line break, a broken URL) is theirs to fix, not a
+        // reason to take the app down: it is reported exactly like a transport failure.
+        val request = runCatching { buildRequest(messages, tools) }.getOrElse { failure ->
+            trySend(StreamEvent.Failure("${failure.javaClass.simpleName}: ${failure.message ?: "request refused"}"))
+            close()
+            return@callbackFlow
         }
 
-        val call = http.newCall(builder.build())
+        val call = http.newCall(request)
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 trySend(StreamEvent.Failure("${e.javaClass.simpleName}: ${e.message ?: "request failed"}"))
@@ -119,6 +113,25 @@ class LlmClient(
 
         awaitClose { call.cancel() }
     }.flowOn(Dispatchers.IO)
+
+    /** One turn as an HTTP POST. The values come from user settings, so the key is cleaned first. */
+    internal fun buildRequest(messages: List<Message>, tools: List<ToolSpec>): Request {
+        val body = buildRequestBody(messages, tools).toString()
+        val builder = Request.Builder()
+            .url(config.chatCompletionsUrl)
+            .post(body.toRequestBody(JSON_MEDIA))
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+        val apiKey = config.apiKey.headerSafe()
+        if (apiKey.isNotEmpty()) {
+            builder.header("Authorization", "Bearer $apiKey")
+        }
+        if (config.kind == ProviderKind.OPENROUTER) {
+            builder.header("HTTP-Referer", "https://github.com/humanphone")
+            builder.header("X-Title", "HumanPhone")
+        }
+        return builder.build()
+    }
 
     private fun buildRequestBody(messages: List<Message>, tools: List<ToolSpec>): JsonObject =
         buildJsonObject {
