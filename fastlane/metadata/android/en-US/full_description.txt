@@ -1,0 +1,16 @@
+HumanPhone puts a language model in charge of your phone. It is a chat client that can also read the screen and tap, type, scroll and navigate on your behalf, exactly like a person using the phone.
+
+Two surfaces, one app:
+
+* Chat: streaming conversations with markdown rendering, image attachments, recorded voice notes and a hands-free live mode that keeps listening after every spoken answer.
+* Operator: enable the HumanPhone accessibility service and a floating dot hands a spoken or typed task to an agent loop that reads the visible screen and performs real taps, text entry, scrolling and app navigation until the task is done. Every step is shown live, and a run can be cancelled at any time.
+
+There is no HumanPhone account, no vendor backend and no telemetry. The app only talks to the model endpoints you configure: a local Ollama server, OpenRouter, or any OpenAI-compatible base URL with /chat/completions. An optional OpenAI-compatible /audio/transcriptions endpoint (for example Whisper) turns recorded voice notes into text; without it the phone's own speech recogniser is used.
+
+The operator has tools for reading the screen, tapping a node or text, typing and clearing text, scrolling, back/home/recents/notifications, launching apps, opening URLs, placing calls, composing texts, looking up contacts, creating alarms, opening system settings pages, searching the web, fetching a page as text, submitting a form, waiting for text to appear, remembering small facts between runs, speaking out loud and finishing with a summary.
+
+Nothing leaves the device except the requests to those endpoints: screen contents are only sent when you turn on screenshot sending, and conversations are stored locally.
+
+Requires Android 11 or newer. For the operator, Android also needs the accessibility service enabled and the display-over-other-apps permission for the floating dot (Settings, Apps, HumanPhone, Restricted settings).
+
+HumanPhone is free software, licensed under the GPL-3.0-or-later.

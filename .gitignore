@@ -10,3 +10,10 @@
 local.properties
 app/build/
 build/
+
+# Kotlin incremental compilation state
+.kotlin/
+
+# CI scratch (GitLab)
+.android-sdk/
+.gradle-home/
