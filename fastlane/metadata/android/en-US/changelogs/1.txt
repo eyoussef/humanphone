@@ -1,0 +1,7 @@
+First release.
+
+* Chat with an OpenAI-compatible model: streaming replies, markdown, image attachments, voice notes.
+* Hands-free live mode that keeps listening after each spoken answer.
+* Operator mode: an accessibility agent that reads the screen and taps, types, scrolls and navigates for you.
+* Tools for apps, URLs, calls, texts, contacts, alarms, settings and web search.
+* Local (Ollama) and custom endpoints; no account, no telemetry.

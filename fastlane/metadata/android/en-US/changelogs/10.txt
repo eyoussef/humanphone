@@ -1,0 +1,7 @@
+Auto mode, app language and chat cleanup.
+
+* Auto mode: the agent now watches new notifications and answers the ones that need a reply on your behalf — promotions, one-time codes and machine sends are skipped.
+* Language: the app interface ships in English, العربية, Français, Español, Português and हिन्दी (per-app language, Android 13 or newer).
+* The floating dot is gone; agent runs are started from the chat or the Agent tab and shown in the status notification.
+* Delete icon on every conversation chip in the chat switcher.
+* Single mic/send button in the chat input row.
