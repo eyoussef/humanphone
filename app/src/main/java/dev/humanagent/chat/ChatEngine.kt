@@ -5,8 +5,11 @@ import android.os.Handler
 import android.os.Looper
 import dev.humanagent.agent.AgentService
 import dev.humanagent.agent.MemoryStore
+import dev.humanagent.llm.AppSettings
+import dev.humanagent.llm.FilePart
 import dev.humanagent.llm.LlmClient
 import dev.humanagent.llm.Message
+import dev.humanagent.llm.ProviderKind
 import dev.humanagent.llm.SettingsStore
 import dev.humanagent.llm.StreamEvent
 import dev.humanagent.voice.Speaker
@@ -31,6 +34,9 @@ class ChatEngine(
     private val speaker: Speaker,
     private val memory: MemoryStore,
 ) {
+
+    /** Entry point for the chat screen: files are copied into app storage when they are imported. */
+    val attachments = AttachmentStore(context)
 
     private val store = ConversationStore(File(context.filesDir, "conversations.json"))
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -82,9 +88,27 @@ class ChatEngine(
         _error.value = null
     }
 
-    fun send(text: String) {
+    /** Deletes a conversation; when it is the active one the chat moves to the newest other one. */
+    fun deleteConversation(id: String) {
+        val wasActive = _activeId.value == id
+        if (wasActive) {
+            cancel()
+            _activeId.value = ""
+            _messages.value = emptyList()
+            _error.value = null
+        }
+        _conversations.value = _conversations.value.filterNot { it.id == id }
+        if (wasActive) {
+            val next = _conversations.value.firstOrNull()
+            if (next != null) openConversation(next.id) else newConversation()
+        }
+        persist()
+    }
+
+    fun send(text: String, attachments: List<Attachment> = emptyList()) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _streaming.value) return
+        if (_streaming.value) return
+        if (trimmed.isEmpty() && attachments.isEmpty()) return
 
         if (trimmed.startsWith(DO_PREFIX)) {
             val command = trimmed.removePrefix(DO_PREFIX).trim()
@@ -97,7 +121,7 @@ class ChatEngine(
             append(
                 ChatTurn(
                     ROLE_ASSISTANT,
-                    "On it — taking over the phone now. Watch the dot (or the Run tab) for each step.",
+                    "On it — taking over the phone now. Watch the Agent tab (or the notification) for each step.",
                     now(),
                 )
             )
@@ -106,7 +130,7 @@ class ChatEngine(
             return
         }
 
-        append(ChatTurn(ROLE_USER, trimmed, now()))
+        append(ChatTurn(ROLE_USER, trimmed, now(), attachments))
         _error.value = null
         persist()
         job = scope.launch { respond() }
@@ -167,27 +191,110 @@ class ChatEngine(
         persist()
     }
 
-    private fun history(settings: dev.humanagent.llm.AppSettings): List<Message> {
+    private suspend fun history(settings: AppSettings): List<Message> {
         val messages = ArrayList<Message>()
         messages += Message.system(systemPrompt(settings))
-        _messages.value
-            .filter { it.text.isNotBlank() }
+        val turns = _messages.value
+            .filter { it.text.isNotBlank() || it.attachments.isNotEmpty() }
             .takeLast(HISTORY_TURNS)
-            .forEach { turn ->
-                messages += when (turn.role) {
-                    ROLE_USER -> Message.user(turn.text)
-                    else -> Message.assistant(turn.text)
+        // Only the newest image turns keep their payloads: images are heavy and the model mostly
+        // needs the one the user just sent. Older ones stay visible as a line of text.
+        val payloadTurns = turns.indices
+            .filter { index ->
+                turns[index].role == ROLE_USER &&
+                    turns[index].attachments.any { it.kind == AttachmentStore.KIND_IMAGE }
+            }
+            .takeLast(MAX_IMAGE_TURNS)
+            .toSet()
+        val sendsFiles = settings.providerKind != ProviderKind.OLLAMA
+
+        turns.forEachIndexed { index, turn ->
+            if (turn.role != ROLE_USER) {
+                messages += Message.assistant(turn.text)
+                return@forEachIndexed
+            }
+
+            val images = ArrayList<String>()
+            val files = ArrayList<FilePart>()
+            val extra = StringBuilder()
+            turn.attachments.forEach { attachment ->
+                when (attachment.kind) {
+                    AttachmentStore.KIND_IMAGE -> {
+                        val payload = if (index in payloadTurns && images.size < AttachmentStore.MAX_IMAGES_PER_MESSAGE) {
+                            attachments.imageBase64(attachment)
+                        } else {
+                            null
+                        }
+                        if (payload != null) {
+                            images += payload
+                        } else {
+                            extra.appendLine("[image sent earlier: ${attachment.name}]")
+                        }
+                    }
+
+                    AttachmentStore.KIND_TEXT -> {
+                        val body = attachments.text(attachment, AttachmentStore.TEXT_INLINE_LIMIT + 1)
+                        if (body == null) {
+                            extra.appendLine("[attached file: ${attachment.name} — could not be read]")
+                        } else {
+                            val cut = body.length > AttachmentStore.TEXT_INLINE_LIMIT
+                            extra.appendLine("--- attached file: ${attachment.name} ---")
+                            extra.append(body.take(AttachmentStore.TEXT_INLINE_LIMIT))
+                            if (cut) extra.append("\n…(truncated)")
+                            extra.appendLine()
+                            extra.appendLine("--- end of ${attachment.name} ---")
+                        }
+                    }
+
+                    else -> {
+                        val payload = if (sendsFiles) attachments.base64(attachment) else null
+                        if (payload != null) {
+                            files += FilePart(
+                                fileName = attachment.name,
+                                mimeType = attachment.mimeType,
+                                base64 = payload,
+                            )
+                        } else if (sendsFiles) {
+                            extra.appendLine("[attached file: ${attachment.name} — could not be read]")
+                        } else {
+                            extra.appendLine("[attached file: ${attachment.name} — this provider cannot read it]")
+                        }
+                    }
                 }
             }
+
+            val content = when {
+                turn.text.isNotBlank() -> turn.text
+                turn.attachments.isNotEmpty() -> attachmentSentence(turn.attachments)
+                else -> ""
+            }
+            val builder = StringBuilder(content)
+            if (extra.isNotEmpty()) {
+                if (builder.isNotEmpty()) builder.append('\n')
+                builder.append(extra.toString().trimEnd())
+            }
+            messages += Message.user(builder.toString(), images, files)
+        }
         return messages
     }
 
-    private fun systemPrompt(settings: dev.humanagent.llm.AppSettings): String = buildString {
+    /** What the model gets when the user sent files without typing anything. */
+    private fun attachmentSentence(list: List<Attachment>): String {
+        val noun = when {
+            list.size > 1 -> "files"
+            list.first().kind == AttachmentStore.KIND_IMAGE -> "image"
+            else -> "file"
+        }
+        return "Please look at the attached $noun: ${attachments.summary(list)}."
+    }
+
+    private fun systemPrompt(settings: AppSettings): String = buildString {
         append(settings.persona)
         append("\n\nYou are chatting inside the HumanPhone Android app on the user's own phone.\n")
-        append("- You can operate the phone: reading the screen, tapping, typing, scrolling, opening apps, sending SMS.\n")
+        append("- You can operate the phone: reading the screen, tapping, typing, scrolling, opening apps, sending SMS, comparing prices across apps and building real websites.\n")
         append("- The user triggers that by starting a message with \"$DO_PREFIX\" followed by the task; ")
         append("when they ask for an action without it, answer and remind them of the \"$DO_PREFIX\" shortcut once.\n")
+        append("- The user can attach photos and documents to a message; they arrive with it, so look at them before answering.\n")
         append("- Keep replies short, warm and spoken-friendly: they may be read out loud.\n")
         val notes = memory.snapshot()
         if (notes.isNotEmpty()) {
@@ -216,7 +323,10 @@ class ChatEngine(
     private fun snapshot(): List<Conversation> {
         val id = _activeId.value
         val turns = _messages.value
-        val title = ConversationStore.titleFor(turns.firstOrNull { it.role == ROLE_USER }?.text.orEmpty())
+        val firstUser = turns.firstOrNull { it.role == ROLE_USER }
+        val titleSource = firstUser?.text?.takeIf { it.isNotBlank() }
+            ?: firstUser?.attachments?.firstOrNull()?.name.orEmpty()
+        val title = ConversationStore.titleFor(titleSource)
         val active = Conversation(id, title, System.currentTimeMillis(), turns)
         val others = _conversations.value.filterNot { it.id == id }
         return listOf(active) + others
@@ -229,5 +339,8 @@ class ChatEngine(
         private const val ROLE_USER = "user"
         private const val ROLE_ASSISTANT = "assistant"
         private const val HISTORY_TURNS = 24
+
+        /** Newest user turns whose image payloads still travel in full. */
+        private const val MAX_IMAGE_TURNS = 2
     }
 }

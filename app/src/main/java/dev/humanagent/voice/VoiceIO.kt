@@ -7,18 +7,28 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
+import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * The single [Handler] of this file. `SpeechRecognizer` and `TextToSpeech` are main-thread only, so
@@ -32,12 +42,18 @@ private fun onMainThread(block: () -> Unit) {
 }
 
 /**
- * Microphone input built on [SpeechRecognizer].
+ * Microphone input for dictation and agent commands.
  *
- * Call [startListening] when the user wants to talk; [heard] then emits each finished utterance and
- * [partial] mirrors the live hypothesis while the recognizer is working. A session that ends with
+ * The transcript comes from one of two backends. By default the phone's own [SpeechRecognizer] is
+ * used: call [startListening] when the user wants to talk; [heard] then emits each finished utterance
+ * and [partial] mirrors the live hypothesis while the recognizer is working. A session that ends with
  * silence or an unrecognised phrase is restarted automatically for as long as the caller asked to
  * listen, so a hands-free conversation does not stall on the first quiet moment.
+ *
+ * When the configured [SttConfig] names a remote endpoint ([SttConfig.isRemoteUsable]) the microphone
+ * is recorded to a WAV instead and uploaded for transcription, which is where [status] reports the
+ * progress of the capture and the upload. Misconfiguration is reported through [status] rather than
+ * silently falling back to the on-device recognizer.
  *
  * All public members may be called from any thread; recognizer work always happens on the main thread.
  */
@@ -53,14 +69,48 @@ class VoiceIO(private val context: Context) {
     /** Live hypothesis for the utterance in progress; empty when nothing is being heard. */
     val partial: StateFlow<String> = _partial.asStateFlow()
 
+    private val _status = MutableStateFlow("")
+
+    /**
+     * Human-readable state of the input row: empty while idle, `"Recording… 3s"` while capturing,
+     * `"Transcribing…"` while uploading, and the error sentence for a few seconds after a failure.
+     */
+    val status: StateFlow<String> = _status.asStateFlow()
+
     private val _heard = MutableSharedFlow<String>(extraBufferCapacity = 8)
 
     /** Completed utterances in order. Nothing is replayed, so collect this live. */
     val heard: Flow<String> = _heard
 
+    @Volatile
+    private var config = SttConfig()
+
+    private val recorder = AudioRecorder(context)
+    private val transcriber = RemoteTranscriber()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    private var capture: RemoteCapture? = null
+    private var elapsedJob: Job? = null
+    private var transcribeJob: Job? = null
+    private var statusJob: Job? = null
+    private var captureStartedAt = 0L
+
+    /** One remote dictation attempt, guarded so its file is handled exactly once. */
+    private class RemoteCapture {
+        var handled = false
+    }
+
     private var recognizer: SpeechRecognizer? = null
     private var listeningRequested = false
     private var restart: Runnable? = null
+
+    /**
+     * Replaces the backend used by the next [startListening] call. Safe to call from any thread and
+     * while a session is running; a session already in flight keeps the configuration it started with.
+     */
+    fun updateConfig(config: SttConfig) {
+        this.config = config
+    }
 
     private val listener = object : RecognitionListener {
 
@@ -127,15 +177,27 @@ class VoiceIO(private val context: Context) {
                 _isListening.value = false
                 return@onMainThread
             }
+            if (config.isRemoteUsable) {
+                beginRemoteListening()
+                return@onMainThread
+            }
             listeningRequested = true
             cancelRestart()
             beginListening()
         }
     }
 
-    /** Stops the active session (and any pending auto-restart) and clears the live hypothesis. */
+    /**
+     * Stops the active session (and any pending auto-restart) and clears the live hypothesis. A
+     * recording in progress is finished and transcribed rather than thrown away; an upload that is
+     * already running is left to complete.
+     */
     fun stopListening() {
         onMainThread {
+            capture?.let {
+                finishCapture(it)
+                return@onMainThread
+            }
             listeningRequested = false
             cancelRestart()
             _partial.value = ""
@@ -149,13 +211,22 @@ class VoiceIO(private val context: Context) {
         }
     }
 
-    /** Releases the recognizer. This instance cannot be used afterwards. */
+    /** Releases the recognizer and any recording. This instance cannot be used afterwards. */
     fun destroy() {
         onMainThread {
             listeningRequested = false
             cancelRestart()
+            capture = null
+            elapsedJob?.cancel()
+            elapsedJob = null
+            transcribeJob?.cancel()
+            transcribeJob = null
+            cancelStatusJob()
+            runCatching { recorder.cancel() }
+            scope.cancel()
             _partial.value = ""
             _isListening.value = false
+            _status.value = ""
             val active = recognizer
             recognizer = null
             if (active != null) {
@@ -172,6 +243,103 @@ class VoiceIO(private val context: Context) {
             }
         }
     }
+
+    /**
+     * Starts a remote dictation: record audio, then upload it. A capture or upload already in flight
+     * is left alone, so a second tap cannot lose the audio of the first.
+     */
+    private fun beginRemoteListening() {
+        if (capture != null) return
+        cancelRestart()
+        listeningRequested = false
+        _partial.value = ""
+        clearStatus()
+        val attempt = RemoteCapture()
+        val started = runCatching {
+            recorder.start { file -> scope.launch { finishCapture(attempt, file) } }
+        }.getOrDefault(false)
+        if (!started) {
+            _isListening.value = false
+            _status.value = MICROPHONE_UNAVAILABLE
+            cancelStatusJob()
+            statusJob = scope.launch {
+                delay(STATUS_CLEAR_MS)
+                if (_status.value == MICROPHONE_UNAVAILABLE) _status.value = ""
+            }
+            return
+        }
+        capture = attempt
+        captureStartedAt = SystemClock.elapsedRealtime()
+        _isListening.value = true
+        _status.value = elapsedLabel(0)
+        elapsedJob = scope.launch {
+            while (isActive && capture === attempt) {
+                delay(ELAPSED_TICK_MS)
+                if (capture !== attempt) break
+                val seconds = (SystemClock.elapsedRealtime() - captureStartedAt) / 1_000
+                _status.value = elapsedLabel(seconds)
+            }
+        }
+    }
+
+    /** Ends the capture started by [stopListening] and hands its file over for transcription. */
+    private fun finishCapture(attempt: RemoteCapture) {
+        val file = runCatching { recorder.stop() }.getOrNull()
+        finishCapture(attempt, file)
+    }
+
+    /** Resolves one capture attempt exactly once, whichever trigger got there first. */
+    private fun finishCapture(attempt: RemoteCapture, file: File?) {
+        if (attempt.handled) return
+        attempt.handled = true
+        elapsedJob?.cancel()
+        elapsedJob = null
+        _isListening.value = false
+        _partial.value = ""
+        if (file == null) {
+            if (capture === attempt) capture = null
+            clearStatus()
+            return
+        }
+        clearStatus()
+        _status.value = TRANSCRIBING
+        transcribeJob = scope.launch {
+            val result = runCatching { transcriber.transcribe(config, file) }
+                .getOrElse { Result.failure(it) }
+            runCatching { file.delete() }
+            if (capture === attempt) capture = null
+            result.fold(
+                onSuccess = { text ->
+                    clearStatus()
+                    if (text.isNotBlank()) _heard.tryEmit(text)
+                },
+                onFailure = { error -> showError(error) },
+            )
+        }
+    }
+
+    /** Shows a failure sentence for a few seconds, then returns the row to its idle state. */
+    private fun showError(error: Throwable) {
+        val message = error.message?.takeIf { it.isNotBlank() } ?: error.toString()
+        cancelStatusJob()
+        _status.value = message
+        statusJob = scope.launch {
+            delay(STATUS_CLEAR_MS)
+            if (_status.value == message) _status.value = ""
+        }
+    }
+
+    private fun clearStatus() {
+        cancelStatusJob()
+        _status.value = ""
+    }
+
+    private fun cancelStatusJob() {
+        statusJob?.cancel()
+        statusJob = null
+    }
+
+    private fun elapsedLabel(seconds: Long): String = "Recording… ${seconds}s"
 
     private fun beginListening() {
         if (!listeningRequested) return
@@ -228,6 +396,10 @@ class VoiceIO(private val context: Context) {
 
     private companion object {
         const val RESTART_DELAY_MS = 300L
+        const val ELAPSED_TICK_MS = 500L
+        const val STATUS_CLEAR_MS = 6_000L
+        const val MICROPHONE_UNAVAILABLE = "Microphone is not available."
+        const val TRANSCRIBING = "Transcribing…"
     }
 }
 

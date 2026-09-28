@@ -1,0 +1,63 @@
+<resources>
+    <string name="accessibility_label">Opérateur HumanPhone</string>
+    <string name="accessibility_description">Permet à HumanPhone de lire l\'écran, de taper, de faire défiler et de naviguer dans les applications à votre place, comme une personne utilisant le téléphone.</string>
+    <string name="channel_agent_name">Assistant</string>
+    <string name="channel_agent_description">Affiche l\'état de la tâche en cours.</string>
+
+    <string name="tab_chat">Discuter</string>
+    <string name="tab_agent">Agent</string>
+    <string name="tab_settings">Réglages</string>
+    <string name="open_settings">Réglages</string>
+
+    <string name="new_chat">Nouvelle discussion</string>
+    <string name="delete_conversation">Supprimer %1$s</string>
+    <string name="message_placeholder">Message</string>
+    <string name="no_messages_yet">Aucun message pour l\'instant</string>
+    <string name="empty_hint_type">Écrivez ci-dessous ou touchez le micro pour dicter. Les réponses sont lues à voix haute quand le haut-parleur est activé.</string>
+    <string name="empty_hint_do">Envoyez \"%1$s &lt;task&gt;\" pour que l\'assistant le fasse sur le téléphone lui-même.</string>
+    <string name="status_listening">Écoute…</string>
+    <string name="status_thinking">Réflexion…</string>
+    <string name="status_speaking">Réponse vocale…</string>
+    <string name="status_working_phone">Travaille sur le téléphone…</string>
+    <string name="attach_photo">Joindre une photo</string>
+    <string name="attach_file">Joindre un fichier</string>
+    <string name="send_reply">Envoyer</string>
+    <string name="cancel_reply">Annuler la réponse</string>
+    <string name="dictate_message">Dicter un message</string>
+    <string name="stop_dictating">Arrêter la dictée</string>
+    <string name="spoken_replies_on">Réponses vocales activées</string>
+    <string name="spoken_replies_off">Réponses vocales désactivées</string>
+    <string name="loading_settings">Chargement des réglages…</string>
+    <string name="no_model_selected">Aucun modèle choisi — ouvrez les réglages</string>
+
+    <string name="agent_title">Agent</string>
+    <string name="agent_subtitle">Exécute une tâche sur ce téléphone via le service d\'accessibilité.</string>
+    <string name="agent_service">Service de l\'agent</string>
+    <string name="service_running">Service au premier plan en cours</string>
+    <string name="service_stopped">Service au premier plan arrêté</string>
+    <string name="auto_mode">Mode auto</string>
+    <string name="auto_mode_detail">Lit les nouvelles notifications et répond à celles qui méritent une réponse.</string>
+    <string name="agent_engine_streaming">La discussion diffuse — l\'agent attend le modèle.</string>
+    <string name="working_on_phone">Travaille sur le téléphone.</string>
+    <string name="idle_state">Inactif.</string>
+    <string name="model_output">Sortie du modèle</string>
+    <string name="last_reply">Dernière réponse</string>
+    <string name="trace_title">Trace</string>
+    <string name="command_label">Commande</string>
+    <string name="command_hint">ex. Dis à Alex que je suis en retard</string>
+    <string name="run_task">Lancer</string>
+    <string name="halt_task">Stop</string>
+    <string name="dictate_command">Dicter une commande</string>
+    <string name="no_steps_yet">Aucune étape pour l\'instant. Tapez une commande ou touchez le micro pour en dicter une.</string>
+
+    <string name="language_title">Langue</string>
+    <string name="app_language">Langue de l\'application</string>
+    <string name="app_language_detail">Change la langue de l\'interface. Nécessite Android 13 ou plus récent.</string>
+    <string name="change_language">Modifier</string>
+    <string name="done">Terminé</string>
+    <string name="language_system_default">Langue du système</string>
+
+    <string name="notification_halt">Stop</string>
+    <string name="notification_ready">Prêt quand vous voulez.</string>
+    <string name="notification_working">Travail en cours…</string>
+</resources>

@@ -39,17 +39,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.humanagent.HumanPhoneApp
+import dev.humanagent.R
 import dev.humanagent.agent.AgentService
 import dev.humanagent.agent.AgentStep
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 /**
  * Live view of the on-device agent: service switch, typed/ dictated command, halt button,
@@ -59,14 +63,18 @@ import java.util.Locale
 fun AgentScreen(engineActive: Boolean) {
     val context = LocalContext.current
     val voice = HumanPhoneApp.instance.voice
+    val settingsStore = HumanPhoneApp.instance.settingsStore
     val state by AgentService.loop.collectAsState()
     val serviceRunning by AgentService.isRunning.collectAsState()
+    val settings by settingsStore.settings.collectAsState(initial = null)
     val listening by voice.isListening.collectAsState()
     val partial by voice.partial.collectAsState()
+    val status by voice.status.collectAsState()
+    val scope = rememberCoroutineScope()
 
     var command by remember { mutableStateOf("") }
-    // Only dictation started from this screen's mic is consumed here: the floating bubble runs its
-    // own dictation, and a shared utterance must not be handed to the agent twice.
+    // Only dictation started from this screen's mic is consumed here, and a shared utterance must
+    // not be handed to the agent twice.
     var dictatingHere by remember { mutableStateOf(false) }
     val traceState = rememberLazyListState()
     val transcript = state.transcript
@@ -106,12 +114,12 @@ fun AgentScreen(engineActive: Boolean) {
                 .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
         ) {
             Text(
-                text = "Agent",
+                text = stringResource(R.string.agent_title),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "Runs a task on this phone through the accessibility service.",
+                text = stringResource(R.string.agent_subtitle),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -124,9 +132,16 @@ fun AgentScreen(engineActive: Boolean) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = "Assistant bubble", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    text = if (serviceRunning) "Foreground service running" else "Foreground service stopped",
+                    text = stringResource(R.string.agent_service),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    text = if (serviceRunning) {
+                        stringResource(R.string.service_running)
+                    } else {
+                        stringResource(R.string.service_stopped)
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = if (serviceRunning) {
                         MaterialTheme.colorScheme.secondary
@@ -143,13 +158,36 @@ fun AgentScreen(engineActive: Boolean) {
             )
         }
 
+        // Auto mode: the agent watches notifications and answers the ones that need a reply.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = stringResource(R.string.auto_mode), style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = stringResource(R.string.auto_mode_detail),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = settings?.autoMode == true,
+                onCheckedChange = { wanted ->
+                    scope.launch { settingsStore.update { it.copy(autoMode = wanted) } }
+                },
+            )
+        }
+
         Text(
             text = if (engineActive) {
-                "Chat engine is streaming — the agent waits for the model."
+                stringResource(R.string.agent_engine_streaming)
             } else if (state.running) {
-                "Working on the phone."
+                stringResource(R.string.working_on_phone)
             } else {
-                "Idle."
+                stringResource(R.string.idle_state)
             },
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
@@ -174,7 +212,7 @@ fun AgentScreen(engineActive: Boolean) {
                             Spacer(modifier = Modifier.width(8.dp))
                         }
                         Text(
-                            text = "Model output",
+                            text = stringResource(R.string.model_output),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.secondary,
                         )
@@ -202,13 +240,21 @@ fun AgentScreen(engineActive: Boolean) {
                 value = command,
                 onValueChange = { command = it },
                 modifier = Modifier.weight(1f),
-                label = { Text("Command") },
-                placeholder = { Text("e.g. Text Alex that I am running late") },
+                label = { Text(stringResource(R.string.command_label)) },
+                placeholder = { Text(stringResource(R.string.command_hint)) },
                 maxLines = 3,
                 supportingText = {
-                    if (listening) {
-                        Text(if (partial.isBlank()) "Listening…" else partial)
+                    val voiceStatus = status
+                    val hint = when {
+                        voiceStatus.isNotBlank() -> voiceStatus
+                        listening -> if (partial.isBlank()) {
+                            stringResource(R.string.status_listening)
+                        } else {
+                            partial
+                        }
+                        else -> ""
                     }
+                    if (hint.isNotBlank()) Text(hint)
                 },
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -225,7 +271,11 @@ fun AgentScreen(engineActive: Boolean) {
             ) {
                 Icon(
                     imageVector = if (listening) Icons.Filled.MicOff else Icons.Filled.Mic,
-                    contentDescription = if (listening) "Stop dictating" else "Dictate a command",
+                    contentDescription = if (listening) {
+                        stringResource(R.string.stop_dictating)
+                    } else {
+                        stringResource(R.string.dictate_command)
+                    },
                     tint = if (listening) {
                         MaterialTheme.colorScheme.secondary
                     } else {
@@ -253,7 +303,7 @@ fun AgentScreen(engineActive: Boolean) {
                     modifier = Modifier.size(18.dp),
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Run")
+                Text(text = stringResource(R.string.run_task))
             }
             OutlinedButton(
                 onClick = { AgentService.halt(context) },
@@ -265,7 +315,7 @@ fun AgentScreen(engineActive: Boolean) {
                     modifier = Modifier.size(18.dp),
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Halt")
+                Text(text = stringResource(R.string.halt_task))
             }
         }
 
@@ -304,7 +354,7 @@ fun AgentScreen(engineActive: Boolean) {
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Text(
-                        text = "Last reply",
+                        text = stringResource(R.string.last_reply),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.secondary,
                     )
@@ -318,7 +368,7 @@ fun AgentScreen(engineActive: Boolean) {
             modifier = Modifier.padding(top = 8.dp),
         )
         Text(
-            text = "Trace",
+            text = stringResource(R.string.trace_title),
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
@@ -331,7 +381,7 @@ fun AgentScreen(engineActive: Boolean) {
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "No steps yet. Type a command or tap the mic to dictate one.",
+                    text = stringResource(R.string.no_steps_yet),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(24.dp),

@@ -5,7 +5,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,6 +25,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import dev.humanagent.agent.AgentService
@@ -40,7 +40,7 @@ private const val TAB_SETTINGS = 2
 
 /**
  * Single activity host: bottom navigation between chat, agent and settings, the notification
- * permission prompt, and the assistant bubble lifecycle.
+ * permission prompt, and the assistant service lifecycle.
  */
 class MainActivity : ComponentActivity() {
 
@@ -63,8 +63,8 @@ class MainActivity : ComponentActivity() {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        // The bubble is only usable once the user allowed drawing over other apps.
-        if (Settings.canDrawOverlays(this) && !AgentService.isRunning.value) {
+        // The service hosts the on-device agent loop; the launcher opens straight into the app.
+        if (!AgentService.isRunning.value) {
             AgentService.start(this)
         }
 
@@ -125,19 +125,19 @@ private fun BottomBar(selected: Int, onSelect: (Int) -> Unit) {
             selected = selected == TAB_CHAT,
             onClick = { onSelect(TAB_CHAT) },
             icon = { Icon(imageVector = Icons.Filled.Chat, contentDescription = null) },
-            label = { Text(text = "Chat") },
+            label = { Text(text = stringResource(R.string.tab_chat)) },
         )
         NavigationBarItem(
             selected = selected == TAB_AGENT,
             onClick = { onSelect(TAB_AGENT) },
             icon = { Icon(imageVector = Icons.Filled.SmartToy, contentDescription = null) },
-            label = { Text(text = "Agent") },
+            label = { Text(text = stringResource(R.string.tab_agent)) },
         )
         NavigationBarItem(
             selected = selected == TAB_SETTINGS,
             onClick = { onSelect(TAB_SETTINGS) },
             icon = { Icon(imageVector = Icons.Filled.Settings, contentDescription = null) },
-            label = { Text(text = "Settings") },
+            label = { Text(text = stringResource(R.string.tab_settings)) },
         )
     }
 }

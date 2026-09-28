@@ -53,7 +53,7 @@ class ScreenSnapshotRendererTest {
             false,
             listOf(
                 element(5, "Remember me", checkable = true, checked = false),
-                element(6, "", editable = true, focused = true, description = "Message"),
+                element(6, "Message", editable = true, focused = true, description = "Message"),
             ),
         )
         assertTrue(rendered.contains("unchecked"))
@@ -75,6 +75,23 @@ class ScreenSnapshotRendererTest {
         assertTrue(!withoutId.contains("id="))
     }
 
+    @Test
+    fun secondaryWindowsAreNamedInTheHeader() {
+        val single = ScreenSnapshotRenderer.render("Canva", "", 8, false, listOf(element(1, "Canva AI", clickable = true)))
+        assertTrue(!single.contains("windows"))
+
+        val merged = ScreenSnapshotRenderer.render(
+            appLabel = "Canva",
+            windowTitle = "",
+            nodeCount = 8,
+            truncated = false,
+            elements = listOf(element(1, "Canva AI", clickable = true), element(2, "Generate", clickable = true)),
+            windowCount = 2,
+        )
+        assertTrue(merged.contains("2 windows"))
+        assertTrue(merged.contains("[2] Button \"Generate\""))
+    }
+
     private fun element(
         index: Int,
         text: String,
@@ -88,7 +105,11 @@ class ScreenSnapshotRendererTest {
         enabled: Boolean = true,
     ) = UiElement(
         index = index,
-        className = if (editable) "EditText" else "Button",
+        className = when {
+            editable -> "EditText"
+            clickable -> "Button"
+            else -> "TextView"
+        },
         text = text,
         description = description,
         hint = "",

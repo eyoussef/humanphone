@@ -14,6 +14,14 @@ data class ToolCall(
     val arguments: String = "{}",
 )
 
+/** A document attached to a turn, sent to providers that accept `file` content parts. */
+@Serializable
+data class FilePart(
+    val fileName: String,
+    val mimeType: String,
+    val base64: String,
+)
+
 /** A single turn in an OpenAI-compatible conversation. */
 @Serializable
 data class Message(
@@ -24,10 +32,16 @@ data class Message(
     val name: String? = null,
     /** Base64 JPEG payloads attached to this turn for vision models. */
     val images: List<String> = emptyList(),
+    /** Documents attached to this turn; Ollama rejects them, so callers must not send them there. */
+    val files: List<FilePart> = emptyList(),
 ) {
     companion object {
         fun system(text: String) = Message(role = "system", content = text)
-        fun user(text: String) = Message(role = "user", content = text)
+        fun user(
+            text: String,
+            images: List<String> = emptyList(),
+            files: List<FilePart> = emptyList(),
+        ) = Message(role = "user", content = text, images = images, files = files)
         fun assistant(text: String) = Message(role = "assistant", content = text)
         fun tool(callId: String, name: String, text: String) =
             Message(role = "tool", content = text, toolCallId = callId, name = name)

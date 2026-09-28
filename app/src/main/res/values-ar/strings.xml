@@ -1,0 +1,63 @@
+<resources>
+    <string name="accessibility_label">مشغّل HumanPhone</string>
+    <string name="accessibility_description">يتيح لتطبيق HumanPhone قراءة الشاشة والنقر والكتابة والتمرير والتنقل بين التطبيقات نيابةً عنك، تمامًا كشخص يستخدم الهاتف.</string>
+    <string name="channel_agent_name">المساعد</string>
+    <string name="channel_agent_description">يعرض حالة المهمة الجارية.</string>
+
+    <string name="tab_chat">المحادثة</string>
+    <string name="tab_agent">الوكيل</string>
+    <string name="tab_settings">الإعدادات</string>
+    <string name="open_settings">الإعدادات</string>
+
+    <string name="new_chat">محادثة جديدة</string>
+    <string name="delete_conversation">حذف %1$s</string>
+    <string name="message_placeholder">رسالة</string>
+    <string name="no_messages_yet">لا توجد رسائل بعد</string>
+    <string name="empty_hint_type">اكتب أدناه أو اضغط الميكروفون للإملاء. تُقرأ الردود بصوت عالٍ عند تشغيل مكبّر الصوت.</string>
+    <string name="empty_hint_do">أرسل \"%1$s &lt;task&gt;\" ليقوم المساعد بالمهمة على الهاتف نفسه.</string>
+    <string name="status_listening">يستمع…</string>
+    <string name="status_thinking">يفكر…</string>
+    <string name="status_speaking">يتحدث…</string>
+    <string name="status_working_phone">يعمل على الهاتف…</string>
+    <string name="attach_photo">إرفاق صورة</string>
+    <string name="attach_file">إرفاق ملف</string>
+    <string name="send_reply">إرسال</string>
+    <string name="cancel_reply">إلغاء الرد</string>
+    <string name="dictate_message">إملاء رسالة</string>
+    <string name="stop_dictating">إيقاف الإملاء</string>
+    <string name="spoken_replies_on">الردود الصوتية مفعّلة</string>
+    <string name="spoken_replies_off">الردود الصوتية متوقفة</string>
+    <string name="loading_settings">جارٍ تحميل الإعدادات…</string>
+    <string name="no_model_selected">لم يتم اختيار نموذج — افتح الإعدادات</string>
+
+    <string name="agent_title">الوكيل</string>
+    <string name="agent_subtitle">ينفّذ مهمة على هذا الهاتف عبر خدمة إمكانية الوصول.</string>
+    <string name="agent_service">خدمة الوكيل</string>
+    <string name="service_running">الخدمة الأمامية تعمل</string>
+    <string name="service_stopped">الخدمة الأمامية متوقفة</string>
+    <string name="auto_mode">الوضع التلقائي</string>
+    <string name="auto_mode_detail">يقرأ الإشعارات الجديدة ويرد على ما يحتاج إلى رد.</string>
+    <string name="agent_engine_streaming">المحادثة تعمل — الوكيل ينتظر النموذج.</string>
+    <string name="working_on_phone">يعمل على الهاتف.</string>
+    <string name="idle_state">خامل.</string>
+    <string name="model_output">مخرجات النموذج</string>
+    <string name="last_reply">الرد الأخير</string>
+    <string name="trace_title">المسار</string>
+    <string name="command_label">الأمر</string>
+    <string name="command_hint">مثال: أرسل إلى Alex أنني سأتأخر</string>
+    <string name="run_task">تشغيل</string>
+    <string name="halt_task">إيقاف</string>
+    <string name="dictate_command">إملاء أمر</string>
+    <string name="no_steps_yet">لا خطوات بعد. اكتب أمرًا أو اضغط الميكروفون لإملائه.</string>
+
+    <string name="language_title">اللغة</string>
+    <string name="app_language">لغة التطبيق</string>
+    <string name="app_language_detail">يغيّر لغة واجهة التطبيق. يتطلب أندرويد 13 أو أحدث.</string>
+    <string name="change_language">تغيير</string>
+    <string name="done">تم</string>
+    <string name="language_system_default">لغة النظام</string>
+
+    <string name="notification_halt">إيقاف</string>
+    <string name="notification_ready">جاهز متى احتجت.</string>
+    <string name="notification_working">يعمل…</string>
+</resources>

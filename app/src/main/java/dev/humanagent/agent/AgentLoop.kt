@@ -8,6 +8,7 @@ import dev.humanagent.llm.Message
 import dev.humanagent.llm.SettingsStore
 import dev.humanagent.llm.StreamEvent
 import dev.humanagent.voice.Speaker
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -53,6 +54,7 @@ class AgentLoop(
     private val _state = MutableStateFlow(AgentRunState())
     val state: StateFlow<AgentRunState> = _state.asStateFlow()
 
+    private val skills = SkillStore(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var job: Job? = null
 
@@ -76,6 +78,7 @@ class AgentLoop(
     private suspend fun execute(command: String) {
         _state.value = AgentRunState(running = true)
         step("task", "Task", command)
+        runCatching { skills.load() }
 
         val settings = settingsStore.current()
         val config = settings.toProviderConfig()
@@ -91,7 +94,7 @@ class AgentLoop(
 
         val reader = ScreenReader(service)
         val executor = UiActionExecutor(service, reader)
-        val tools = AgentTools(context, memory, speaker)
+        val tools = AgentTools(context, memory, speaker, skills)
         val client = LlmClient(config)
         val conversation = mutableListOf<Message>()
         conversation += Message.system(buildSystemPrompt(settings))
@@ -99,6 +102,8 @@ class AgentLoop(
 
         var stepIndex = 0
         var answered = false
+        var nudges = 0
+        var usedTools = false
         while (stepIndex < settings.maxSteps && currentCoroutineContext().isActive) {
             stepIndex++
             val snapshot = reader.snapshot()
@@ -109,7 +114,7 @@ class AgentLoop(
             }
             conversation += Message(
                 role = "user",
-                content = "Step $stepIndex. Current screen:\n${snapshot.rendered}",
+                content = "Step $stepIndex. Current screen:\n${snapshot.rendered}${skillNotes(snapshot)}",
                 images = listOfNotNull(screenshot),
             )
 
@@ -122,6 +127,17 @@ class AgentLoop(
 
             if (assistant.toolCalls.isEmpty()) {
                 val reply = assistant.content.ifBlank { "I stopped without a result." }
+                if (!answered && usedTools && nudges < 2) {
+                    // A plain answer while the task is still open: nudge the model back to
+                    // the tools instead of ending the run halfway through.
+                    nudges++
+                    step("nudge", "Continue", reply)
+                    conversation += Message.user(
+                        "Keep working. Use the tools step by step until the whole task is done, and call finish with a short summary. Do not stop halfway with words alone.",
+                    )
+                    trim(conversation)
+                    continue
+                }
                 step("reply", "Assistant", reply)
                 if (settings.speakReplies) say(reply)
                 _state.update { it.copy(lastReply = reply, liveText = "") }
@@ -131,6 +147,7 @@ class AgentLoop(
 
             var terminal = false
             for (call in assistant.toolCalls) {
+                usedTools = true
                 if (!currentCoroutineContext().isActive) return
                 step("action", call.name, call.arguments)
                 val outcome = tools.execute(call, executor, service, settings)
@@ -164,25 +181,64 @@ class AgentLoop(
         _state.update { it.copy(running = false, liveText = "") }
     }
 
+    /** Streams the next model turn, retrying once on transient provider failures. */
     private suspend fun askModel(
         client: LlmClient,
         conversation: List<Message>,
         tools: AgentTools,
-    ): Message? = withContext(Dispatchers.IO) {
-        var completed: Message? = null
-        val live = StringBuilder()
-        client.stream(conversation, tools.specs).collect { event ->
-            when (event) {
-                is StreamEvent.TextDelta -> {
-                    live.append(event.text)
-                    _state.update { it.copy(liveText = live.toString().takeLast(400)) }
-                }
+    ): Message? {
+        var failure: String? = null
+        repeat(2) { attempt ->
+            var completed: Message? = null
+            var attemptFailed: String? = null
+            val live = StringBuilder()
+            try {
+                client.stream(conversation, tools.specs).collect { event ->
+                    when (event) {
+                        is StreamEvent.TextDelta -> {
+                            live.append(event.text)
+                            _state.update { it.copy(liveText = live.toString().takeLast(400)) }
+                        }
 
-                is StreamEvent.Completed -> completed = event.message
-                is StreamEvent.Failure -> fail(event.message)
+                        is StreamEvent.Completed -> completed = event.message
+                        is StreamEvent.Failure -> attemptFailed = event.message
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                attemptFailed = e.message ?: e.javaClass.simpleName
+            }
+            if (completed != null) {
+                return completed
+            }
+            failure = attemptFailed ?: "The model stopped responding."
+            if (attempt == 0) {
+                step("error", "Retrying", failure!!)
+                delay(1_500)
             }
         }
-        completed
+        fail(failure ?: "The model stopped responding.")
+        return null
+    }
+
+    /**
+     * The app's own manual for the step: the built-in notes plus anything learned before. Empty
+     * when the assistant knows nothing about the app that is on screen.
+     */
+    private fun skillNotes(snapshot: ScreenSnapshot): String {
+        val skill = AppSkills.forApp(snapshot.appLabel, snapshot.packageName)
+        val learned = skills.render(snapshot.appLabel, snapshot.packageName)
+        if (skill == null && learned == null) return ""
+        return buildString {
+            if (skill != null) {
+                append("\nApp skill — ")
+                append(skill.appName)
+                append(": ")
+                append(skill.notes.joinToString(" | ").take(900))
+            }
+            if (learned != null) append('\n').append(learned)
+        }
     }
 
     private fun buildSystemPrompt(settings: AppSettings): String = buildString {
@@ -192,9 +248,24 @@ class AgentLoop(
         append("- The latest screen dump is given to you at every step, with an index for each element.\n")
         append("- Use those indices or the visible wording to act; never invent elements.\n")
         append("- Take one or two actions, then look at the screen again before the next move.\n")
+        append("- Menus and app toolbars often scroll sideways, so only the tiles currently on screen appear in the dump: reach the rest with scroll_in on that container's index, or with scroll_to_text \"<the label you need>\".\n")
+        append("- When the screen is crowded or the same wording appears several times, use find_text first and tap the match you want, with its occurrence number.\n")
+        append("- After submitting anything that generates, uploads or loads a result, use wait_for_text for the result instead of tapping blindly.\n")
+        append("- press_enter submits the focused field, which is how prompts, chat messages and searches are sent.\n")
+        append("- Once a multi-step flow works, store it with save_skill so the same app is easier next time.\n")
+        append("- The \"App skill\" notes above the screen dump are that app's own manual: follow them and prefer them over guessing.\n")
         append("- Use find_contact before call or send_sms when you only know a name.\n")
         append("- Use speak when the user should hear progress, and finish the moment the goal is met, blocked, or needs the user.\n")
         append("- If the user writes in another language, answer in that language.\n")
+        append("\nShopping and booking discipline:\n")
+        append("- For anything the user must pay for or book, the first result is never the answer. Open at least three options across apps or sites before deciding.\n")
+        append("- Record every candidate with record_offer: name, price, currency and what is included. If a screen hides the price, open the offer and look for it before recording.\n")
+        append("- Use compare_offers to rank them, book the cheapest that meets the user's constraints, and finish with the price you chose and what you compared.\n")
+        append("\nWhen the user asks for a website, build a real one:\n")
+        append("- create_site to start it, then write_site_file for index.html and style.css: semantic HTML, one clean palette, responsive layout, real content from the user's brief.\n")
+        append("- Give it real images: download_image each one from the web (prefer stable direct image URLs) and reference them as images/<file>.\n")
+        append("- preview_site serves the site on the phone and opens the browser; polish what looks wrong, then finish with the local address http://127.0.0.1:<port>/.\n")
+        append("- While the task is open, reply with tool calls, never with words alone. Call finish only when the goal is fully met, or when you are truly blocked and need the user.\n")
         if (settings.sendScreenshots) {
             append("- You also receive a screenshot of the screen every step; use it for images, games and canvas content.\n")
         }

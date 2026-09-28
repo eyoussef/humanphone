@@ -1,17 +1,27 @@
 package dev.humanagent.agent
 
 import android.content.Context
+import dev.humanagent.llm.LlmClient
 import dev.humanagent.llm.ToolCall
 import dev.humanagent.llm.ToolSpec
+import dev.humanagent.site.SiteServer
+import dev.humanagent.site.SiteWorkspace
 import dev.humanagent.util.JsonArgs
 import dev.humanagent.voice.Speaker
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import okhttp3.Request
 
 /** What a tool produced. [includeScreen] appends a fresh screen dump so the model stays grounded. */
 data class ToolOutcome(
@@ -28,7 +38,12 @@ class AgentTools(
     private val context: Context,
     private val memory: MemoryStore,
     private val speaker: Speaker,
+    private val skills: SkillStore,
 ) {
+
+    private val board = OfferBoard()
+    private val workspace: SiteWorkspace by lazy { SiteWorkspace(context) }
+    private val siteServer: SiteServer by lazy { SiteServer { workspace.currentDir() } }
 
     val specs: List<ToolSpec> = buildList {
         add(
@@ -48,8 +63,30 @@ class AgentTools(
         add(
             ToolSpec(
                 name = "tap_text",
-                description = "Tap the first element whose visible text or description contains this string. Preferred over tap when the wording is stable.",
-                parameters = schema(listOf("text"), "text" to stringProp("text to look for")),
+                description = "Tap an element whose visible text, description or hint contains this string. Exact matches come first; pass occurrence to take a later match. Preferred over tap when the wording is stable.",
+                parameters = schema(
+                    listOf("text"),
+                    "text" to stringProp("text to look for"),
+                    "occurrence" to intProp("optional 1-based match number when several elements contain the text"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "find_text",
+                description = "List the elements whose text, description or hint contains this string, with their dump indices. Use before tapping when the screen is crowded or the wording repeats.",
+                parameters = schema(listOf("query"), "query" to stringProp("text to look for")),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "long_press",
+                description = "Press and hold an element by index or by text, for context menus, reply popups and multi-select.",
+                parameters = schema(
+                    emptyList(),
+                    "index" to intProp("optional element index"),
+                    "query" to stringProp("optional text to look for"),
+                ),
             )
         )
         add(
@@ -72,10 +109,40 @@ class AgentTools(
         )
         add(
             ToolSpec(
+                name = "press_enter",
+                description = "Submit the focused text field with the keyboard's enter action, which is how prompts, chat messages and searches are sent. Falls back to tapping a send, generate, submit or search button.",
+                parameters = schema(),
+            )
+        )
+        add(
+            ToolSpec(
                 name = "scroll",
                 description = "Swipe inside the current screen. up/down/left/right describe where the finger moves.",
                 parameters = schema(
                     listOf("direction"),
+                    "direction" to stringProp("finger direction", listOf("up", "down", "left", "right")),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "scroll_to_text",
+                description = "Scroll until this text appears, looking at the screen again after every swipe. Use it for menus and toolbars that scroll sideways and for lists whose item is off screen.",
+                parameters = schema(
+                    listOf("query"),
+                    "query" to stringProp("text you are looking for"),
+                    "direction" to stringProp("finger direction", listOf("up", "down", "left", "right")),
+                    "max_swipes" to intProp("optional swipe limit, default 6"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "scroll_in",
+                description = "Scroll one specific container by its dump index, for example the sideways-scrolling bottom toolbar of an app. The element must be marked scrollable in the dump.",
+                parameters = schema(
+                    listOf("index", "direction"),
+                    "index" to intProp("index of the scrollable container"),
                     "direction" to stringProp("finger direction", listOf("up", "down", "left", "right")),
                 ),
             )
@@ -178,9 +245,42 @@ class AgentTools(
         )
         add(
             ToolSpec(
+                name = "app_skill",
+                description = "Read the built-in operating notes and any learned steps for an app. Omit app to get the notes for the app currently on screen.",
+                parameters = schema(
+                    emptyList(),
+                    "app" to stringProp("optional app name or package, e.g. Canva or com.canva.editor"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "save_skill",
+                description = "Store a step-by-step procedure that worked, so the same app is easier next time. Steps are short imperative sentences in the order they were performed.",
+                parameters = schema(
+                    listOf("app", "steps"),
+                    "app" to stringProp("app name, e.g. Canva"),
+                    "package" to stringProp("optional app package, e.g. com.canva.editor"),
+                    "steps" to stringArrayProp("the steps that worked, in order"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
                 name = "speak",
                 description = "Say something out loud to the user right now, for example while working on a long task.",
                 parameters = schema(listOf("text"), "text" to stringProp("sentence to speak")),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "wait_for_text",
+                description = "Wait until this text appears on screen, up to 60 seconds, then report where it landed. Use after anything that generates, uploads or loads a result instead of tapping blindly.",
+                parameters = schema(
+                    listOf("query"),
+                    "query" to stringProp("text you are waiting for"),
+                    "timeout_seconds" to intProp("optional seconds to wait, default 20"),
+                ),
             )
         )
         add(
@@ -197,6 +297,76 @@ class AgentTools(
                 parameters = schema(listOf("summary"), "summary" to stringProp("what happened, in one or two sentences")),
             )
         )
+        add(
+            ToolSpec(
+                name = "record_offer",
+                description = "Record one option you found (a flight, a room, a plan) with its price. Record every candidate from every site or app you check — at least three when possible — then compare_offers before booking anything. Never book the first result.",
+                parameters = schema(
+                    listOf("name", "price"),
+                    "name" to stringProp("offer name as shown, e.g. \"Turkish Airlines Basic\""),
+                    "price" to stringProp("the price as printed, digits only; omit when the screen hides it"),
+                    "currency" to stringProp("optional currency code or symbol, e.g. EUR or $"),
+                    "details" to stringProp("optional what is included: stops, baggage, refundability"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "compare_offers",
+                description = "Rank the recorded offers, cheapest first. Call it before booking; book the cheapest that meets the user's constraints and say the price you chose.",
+                parameters = schema(),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "create_site",
+                description = "Start a real website project: a directory of files on the phone named after the site. Use it before write_site_file.",
+                parameters = schema(listOf("name"), "name" to stringProp("site name, e.g. \"Cafe Luna\"")),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "write_site_file",
+                description = "Write one file of the website, for example index.html or style.css. Write complete, clean, responsive HTML/CSS with one palette, generous spacing and real content from the user's brief.",
+                parameters = schema(
+                    listOf("path", "content"),
+                    "path" to stringProp("file path inside the site, e.g. index.html or pages/about.html"),
+                    "content" to stringProp("the complete file content"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "download_image",
+                description = "Download one image from the web into the site's images folder so HTML can show it. Prefer stable direct image URLs and reference the returned path as images/<file>.",
+                parameters = schema(
+                    listOf("url"),
+                    "url" to stringProp("direct link to the image file"),
+                    "fileName" to stringProp("optional file name, e.g. hero"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "list_site_files",
+                description = "List the files the site has so far, with sizes.",
+                parameters = schema(),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "preview_site",
+                description = "Serve the site from the phone and open it in the browser to check the real look. Polish what looks wrong, then finish with the local address.",
+                parameters = schema(),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "close_site_preview",
+                description = "Stop the local preview server once the site is delivered.",
+                parameters = schema(),
+            )
+        )
     }
 
     suspend fun execute(
@@ -210,7 +380,32 @@ class AgentTools(
             when (call.name) {
                 "read_screen" -> ToolOutcome("Screen read.", includeScreen = true)
                 "tap" -> ToolOutcome(executor.tapIndex(requireInt(args, "index")))
-                "tap_text" -> ToolOutcome(executor.tapText(requireString(args, "text")))
+                "tap_text" -> ToolOutcome(
+                    executor.tapText(requireString(args, "text"), JsonArgs.int(args, "occurrence") ?: 1)
+                )
+                "find_text" -> ToolOutcome(executor.findText(requireString(args, "query")), includeScreen = false)
+                "long_press" -> ToolOutcome(
+                    executor.longPress(JsonArgs.int(args, "index"), JsonArgs.string(args, "query"))
+                )
+                "press_enter" -> ToolOutcome(executor.pressEnter())
+                "scroll_to_text" -> ToolOutcome(
+                    executor.scrollToText(
+                        requireString(args, "query"),
+                        JsonArgs.string(args, "direction") ?: "down",
+                        JsonArgs.int(args, "max_swipes") ?: 6,
+                    )
+                )
+                "scroll_in" -> ToolOutcome(
+                    executor.scrollIn(requireInt(args, "index"), requireString(args, "direction"))
+                )
+                "wait_for_text" -> ToolOutcome(
+                    executor.waitForText(
+                        requireString(args, "query"),
+                        (JsonArgs.int(args, "timeout_seconds") ?: 20) * 1000,
+                    )
+                )
+                "app_skill" -> ToolOutcome(appSkill(executor, JsonArgs.string(args, "app")), includeScreen = false)
+                "save_skill" -> ToolOutcome(saveSkill(args), includeScreen = false)
                 "type_text" -> ToolOutcome(
                     executor.setText(JsonArgs.int(args, "index"), requireString(args, "text"))
                 )
@@ -265,6 +460,51 @@ class AgentTools(
                     delay(seconds * 1000L)
                     ToolOutcome("Waited $seconds seconds.")
                 }
+                "record_offer" -> {
+                    val saved = board.record(
+                        requireString(args, "name"),
+                        offerPrice(args),
+                        JsonArgs.string(args, "currency").orEmpty(),
+                        JsonArgs.string(args, "details").orEmpty(),
+                    )
+                    val price = if (saved.price == null) "unknown price" else "${saved.price}${boardLabel(saved.currency)}"
+                    ToolOutcome("Recorded offer \"${saved.name}\" at $price.", includeScreen = false)
+                }
+                "compare_offers" -> ToolOutcome(board.compare(), includeScreen = false)
+                "create_site" -> {
+                    val dir = workspace.open(requireString(args, "name"))
+                    ToolOutcome(
+                        "Site directory ready (${dir.name}). Build it with write_site_file (index.html, style.css), " +
+                            "decorate with download_image, then check the real look with preview_site.",
+                        includeScreen = false,
+                    )
+                }
+                "write_site_file" -> {
+                    val relative = workspace.writeFile(
+                        JsonArgs.string(args, "site"),
+                        requireString(args, "path"),
+                        requireString(args, "content"),
+                    )
+                    ToolOutcome("Wrote $relative.", includeScreen = false)
+                }
+                "download_image" -> ToolOutcome(
+                    downloadIntoSite(
+                        JsonArgs.string(args, "site"),
+                        requireString(args, "url"),
+                        JsonArgs.string(args, "fileName").orEmpty(),
+                    )
+                )
+                "list_site_files" -> ToolOutcome(workspace.list(JsonArgs.string(args, "site")), includeScreen = false)
+                "preview_site" -> {
+                    val port = siteServer.serve(workspace.dir(JsonArgs.string(args, "site")))
+                    val url = "http://127.0.0.1:$port/"
+                    executor.openUrl(url)
+                    ToolOutcome("Serving the site at $url — it just opened in the browser. Fix what looks wrong, then finish with this address.")
+                }
+                "close_site_preview" -> {
+                    siteServer.stop()
+                    ToolOutcome("Preview server stopped.", includeScreen = false)
+                }
                 "finish" -> ToolOutcome(requireString(args, "summary"), terminal = true, includeScreen = false)
                 else -> ToolOutcome(
                     "There is no tool called \"${call.name}\". Available tools: " +
@@ -272,8 +512,92 @@ class AgentTools(
                     includeScreen = false,
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: IllegalArgumentException) {
             ToolOutcome("Bad arguments for ${call.name}: ${e.message}", includeScreen = false)
+        } catch (e: Exception) {
+            ToolOutcome(
+                "${call.name} did not go through: ${e.javaClass.simpleName}${e.message?.let { ": $it" }.orEmpty()}",
+                includeScreen = false,
+            )
+        }
+    }
+
+    /** The built-in manual plus any stored procedure for an app, or a plain answer when none is known. */
+    private fun appSkill(executor: UiActionExecutor, query: String?): String {
+        val foreground = executor.foregroundApp()
+        val skill = if (query.isNullOrBlank()) {
+            AppSkills.forApp(foreground.label, foreground.packageName)
+        } else {
+            AppSkills.forQuery(query)
+        }
+        val label = skill?.appName ?: query?.trim().orEmpty().ifEmpty { foreground.label }
+        val packageName = skill?.packages?.firstOrNull()
+            ?: if (query.isNullOrBlank()) foreground.packageName else ""
+        val learned = if (query.isNullOrBlank()) {
+            skills.render(foreground.label, foreground.packageName) ?: skills.render(label, packageName)
+        } else {
+            skills.render(query, query) ?: skills.render(label, packageName)
+        }
+        if (skill == null && learned == null) {
+            return if (query.isNullOrBlank()) {
+                "I have no notes for ${foreground.label.ifBlank { foreground.packageName.ifBlank { "the app on screen" } }}" +
+                    " (${foreground.packageName.ifBlank { "unknown package" }}); store what works with save_skill."
+            } else {
+                "I have no notes for \"$query\"; store what works with save_skill and it will be here next time."
+            }
+        }
+        return buildString {
+            if (skill != null) append(AppSkills.render(skill))
+            if (learned != null) {
+                if (isNotEmpty()) append('\n')
+                append(learned)
+            }
+        }
+    }
+
+    private suspend fun saveSkill(args: String): String {
+        val app = requireString(args, "app")
+        val steps = stringList(args, "steps")
+        if (steps.isEmpty()) return "save_skill needs at least one step; nothing was stored."
+        skills.save(app, JsonArgs.string(args, "package").orEmpty(), steps)
+        return "Stored ${steps.size} step${if (steps.size == 1) "" else "s"} for $app; they come back with app_skill."
+    }
+
+    /** Reads a price tolerating "289", "289.50", "€289,50" and "289,50 EUR". */
+    private fun offerPrice(args: String): Double? =
+        JsonArgs.asObject(args)?.get("price")?.let { value ->
+            if (value is JsonNull) {
+                null
+            } else {
+                (value as? JsonPrimitive)?.content?.trim()
+                    ?.replace(',', '.')?.replace(Regex("[^0-9.]"), "")?.toDoubleOrNull()
+            }
+        }
+
+    private fun boardLabel(currency: String): String = if (currency.isBlank()) "" else " $currency"
+
+    /** Downloads one image over HTTP and stores it in the site's images folder. */
+    private fun downloadIntoSite(site: String?, url: String, fileName: String): String {
+        val request = Request.Builder().url(url).build()
+        LlmClient.sharedClient.newCall(request).execute().use { fetched ->
+            require(fetched.isSuccessful) { "download failed with HTTP ${fetched.code}" }
+            val body = fetched.body ?: throw IllegalArgumentException("empty download")
+            val bytes = body.bytes()
+            require(bytes.size <= 10 * 1024 * 1024) { "the file is larger than 10 MB" }
+            val type = body.contentType()
+            val extension = when {
+                fileName.contains('.') -> fileName.substringAfterLast('.')
+                type != null && type.type == "image" -> type.subtype
+                else -> "jpg"
+            }
+            val base = fileName.trim().ifEmpty { "image" }
+                .substringBeforeLast('/')
+                .substringBeforeLast('.')
+                .take(60)
+                .ifEmpty { "image" }
+            return workspace.saveImage(site, base, bytes, extension)
         }
     }
 
@@ -305,5 +629,23 @@ class AgentTools(
     private fun intProp(description: String): JsonObject = buildJsonObject {
         put("type", "integer")
         put("description", description)
+    }
+
+    private fun stringArrayProp(description: String): JsonObject = buildJsonObject {
+        put("type", "array")
+        put("description", description)
+        putJsonObject("items") { put("type", "string") }
+    }
+
+    /** Reads a string list, tolerating one string with newline or semicolon separated steps. */
+    private fun stringList(args: String, key: String): List<String> {
+        val element = JsonArgs.asObject(args)?.get(key) ?: return emptyList()
+        val raw = when {
+            element is JsonArray -> element.mapNotNull { (it as? JsonPrimitive)?.content }
+            element is JsonNull -> emptyList()
+            element is JsonPrimitive -> element.content.split('\n', ';')
+            else -> emptyList()
+        }
+        return raw.map { it.trim().removePrefix("-").trim() }.filter { it.isNotEmpty() }.take(40)
     }
 }
