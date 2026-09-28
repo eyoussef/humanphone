@@ -4,5 +4,62 @@
     <string name="accessibility_label">HumanPhone operator</string>
     <string name="accessibility_description">Lets HumanPhone read the screen and tap, type, scroll and navigate apps on your behalf, exactly like a person using the phone.</string>
     <string name="channel_agent_name">Assistant</string>
-    <string name="channel_agent_description">Shows the assistant bubble and the running task status.</string>
+    <string name="channel_agent_description">Shows the running task status.</string>
+
+    <string name="tab_chat">Chat</string>
+    <string name="tab_agent">Agent</string>
+    <string name="tab_settings">Settings</string>
+    <string name="open_settings">Settings</string>
+
+    <string name="new_chat">New chat</string>
+    <string name="delete_conversation">Delete %1$s</string>
+    <string name="message_placeholder">Message</string>
+    <string name="no_messages_yet">No messages yet</string>
+    <string name="empty_hint_type">Type below or tap the mic to dictate. Replies are read out loud when the speaker toggle is on.</string>
+    <string name="empty_hint_do">Send \"%1$s &lt;task&gt;\" to have the assistant do it on the phone itself.</string>
+    <string name="status_listening">Listening…</string>
+    <string name="status_thinking">Thinking…</string>
+    <string name="status_speaking">Speaking…</string>
+    <string name="status_working_phone">Working on the phone…</string>
+    <string name="attach_photo">Attach a photo</string>
+    <string name="attach_file">Attach a file</string>
+    <string name="send_reply">Send</string>
+    <string name="cancel_reply">Cancel the reply</string>
+    <string name="dictate_message">Dictate a message</string>
+    <string name="stop_dictating">Stop dictating</string>
+    <string name="spoken_replies_on">Spoken replies on</string>
+    <string name="spoken_replies_off">Spoken replies off</string>
+    <string name="loading_settings">Loading settings…</string>
+    <string name="no_model_selected">No model selected — open settings</string>
+
+    <string name="agent_title">Agent</string>
+    <string name="agent_subtitle">Runs a task on this phone through the accessibility service.</string>
+    <string name="agent_service">Agent service</string>
+    <string name="service_running">Foreground service running</string>
+    <string name="service_stopped">Foreground service stopped</string>
+    <string name="auto_mode">Auto mode</string>
+    <string name="auto_mode_detail">Reads new notifications and answers the ones that need a reply.</string>
+    <string name="agent_engine_streaming">Chat engine is streaming — the agent waits for the model.</string>
+    <string name="working_on_phone">Working on the phone.</string>
+    <string name="idle_state">Idle.</string>
+    <string name="model_output">Model output</string>
+    <string name="last_reply">Last reply</string>
+    <string name="trace_title">Trace</string>
+    <string name="command_label">Command</string>
+    <string name="command_hint">e.g. Text Alex that I am running late</string>
+    <string name="run_task">Run</string>
+    <string name="halt_task">Stop</string>
+    <string name="dictate_command">Dictate a command</string>
+    <string name="no_steps_yet">No steps yet. Type a command or tap the mic to dictate one.</string>
+
+    <string name="language_title">Language</string>
+    <string name="app_language">App language</string>
+    <string name="app_language_detail">Changes the language of the app interface. Needs Android 13 or newer.</string>
+    <string name="change_language">Change</string>
+    <string name="done">Done</string>
+    <string name="language_system_default">System default</string>
+
+    <string name="notification_halt">Halt</string>
+    <string name="notification_ready">Ready when you are.</string>
+    <string name="notification_working">Working…</string>
 </resources>

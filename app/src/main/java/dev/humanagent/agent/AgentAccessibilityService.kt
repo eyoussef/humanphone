@@ -47,7 +47,14 @@ class AgentAccessibilityService : AccessibilityService() {
         instance = this
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Auto mode's only live input: every posted notification, flattened and offered to the
+        // agent service over the in-process bus. Filtering (own app, silence, duplicates)
+        // happens on the receiving side.
+        if (event == null) return
+        val notificationEvent = NotificationBus.fromAccessibilityEvent(this, event, packageName)
+        if (notificationEvent != null) NotificationBus.publish(notificationEvent)
+    }
 
     override fun onInterrupt() = Unit
 

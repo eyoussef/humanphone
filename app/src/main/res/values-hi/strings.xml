@@ -1,0 +1,63 @@
+<resources>
+    <string name="accessibility_label">HumanPhone ऑपरेटर</string>
+    <string name="accessibility_description">HumanPhone को आपकी ओर से स्क्रीन पढ़ने, टैप करने, टाइप करने, स्क्रॉल करने और ऐप्स में जाने देता है — बिल्कुल वैसे जैसे कोई इंसान फ़ोन चलाता है।</string>
+    <string name="channel_agent_name">सहायक</string>
+    <string name="channel_agent_description">चल रहे कार्य की स्थिति दिखाता है।</string>
+
+    <string name="tab_chat">चैट</string>
+    <string name="tab_agent">एजेंट</string>
+    <string name="tab_settings">सेटिंग्स</string>
+    <string name="open_settings">सेटिंग्स</string>
+
+    <string name="new_chat">नई चैट</string>
+    <string name="delete_conversation">%1$s हटाएँ</string>
+    <string name="message_placeholder">संदेश</string>
+    <string name="no_messages_yet">अभी कोई संदेश नहीं</string>
+    <string name="empty_hint_type">नीचे लिखें या बोलने के लिए माइक दबाएँ। स्पीकर चालू होने पर जवाब ज़ोर से पढ़े जाते हैं।</string>
+    <string name="empty_hint_do">"%1$s &lt;task&gt;" भेजें तो सहायक यही फ़ोन पर कर देगा।</string>
+    <string name="status_listening">सुन रहा है…</string>
+    <string name="status_thinking">सोच रहा है…</string>
+    <string name="status_speaking">बोल रहा है…</string>
+    <string name="status_working_phone">फ़ोन पर काम कर रहा है…</string>
+    <string name="attach_photo">फ़ोटो जोड़ें</string>
+    <string name="attach_file">फ़ाइल जोड़ें</string>
+    <string name="send_reply">भेजें</string>
+    <string name="cancel_reply">जवाब रद्द करें</string>
+    <string name="dictate_message">संदेश डिक्टेट करें</string>
+    <string name="stop_dictating">डिक्टेशन रोकें</string>
+    <string name="spoken_replies_on">बोले गए उत्तर चालू</string>
+    <string name="spoken_replies_off">बोले गए उत्तर बंद</string>
+    <string name="loading_settings">सेटिंग्स लोड हो रही हैं…</string>
+    <string name="no_model_selected">कोई मॉडल नहीं चुना गया — सेटिंग्स खोलें</string>
+
+    <string name="agent_title">एजेंट</string>
+    <string name="agent_subtitle">इस फ़ोन पर एक्सेसिबिलिटी सर्विस के ज़रिए काम चलाता है।</string>
+    <string name="agent_service">एजेंट सेवा</string>
+    <string name="service_running">फ़ोरग्राउंड सेवा चल रही है</string>
+    <string name="service_stopped">फ़ोरग्राउंड सेवा रुकी है</string>
+    <string name="auto_mode">ऑटो मोड</string>
+    <string name="auto_mode_detail">नई सूचनाएँ पढ़ता है और जिन्हें जवाब देना ज़रूरी हो, उनका उत्तर देता है।</string>
+    <string name="agent_engine_streaming">चैट स्ट्रीम हो रही है — एजेंट मॉडल का इंतज़ार कर रहा है।</string>
+    <string name="working_on_phone">फ़ोन पर काम कर रहा है।</string>
+    <string name="idle_state">खाली है।</string>
+    <string name="model_output">मॉडल का आउटपुट</string>
+    <string name="last_reply">आख़िरी उत्तर</string>
+    <string name="trace_title">ट्रेस</string>
+    <string name="command_label">कमांड</string>
+    <string name="command_hint">जैसे: Alex को लिखो कि मुझे देर हो रही है</string>
+    <string name="run_task">चलाएँ</string>
+    <string name="halt_task">रोकें</string>
+    <string name="dictate_command">कमांड डिक्टेट करें</string>
+    <string name="no_steps_yet">अभी कोई कदम नहीं। कमांड लिखें या माइक दबाकर बोलें।</string>
+
+    <string name="language_title">भाषा</string>
+    <string name="app_language">ऐप की भाषा</string>
+    <string name="app_language_detail">ऐप के इंटरफ़ेस की भाषा बदलता है। Android 13 या नया चाहिए।</string>
+    <string name="change_language">बदलें</string>
+    <string name="done">हो गया</string>
+    <string name="language_system_default">सिस्टम की भाषा</string>
+
+    <string name="notification_halt">रोकें</string>
+    <string name="notification_ready">जब आप चाहें, तैयार हूँ।</string>
+    <string name="notification_working">काम कर रहा है…</string>
+</resources>

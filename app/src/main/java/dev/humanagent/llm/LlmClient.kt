@@ -30,6 +30,9 @@ import java.io.IOException
  * Minimal OpenAI-compatible chat client with SSE streaming and tool-call accumulation.
  * Works against Ollama (`/v1`), OpenRouter and any other OpenAI-compatible endpoint.
  */
+private fun kotlinx.serialization.json.JsonPrimitive?.contentOrEmpty(): String =
+    if (this == null || this is kotlinx.serialization.json.JsonNull) "" else content
+
 class LlmClient(
     private val config: ProviderConfig,
     private val http: OkHttpClient = sharedClient,
@@ -112,7 +115,7 @@ class LlmClient(
         awaitClose { call.cancel() }
     }.flowOn(Dispatchers.IO)
 
-    private fun buildRequestBody(messages: List<Message>, tools: List<ToolSpec>): JsonObject =
+    internal fun buildRequestBody(messages: List<Message>, tools: List<ToolSpec>): JsonObject =
         buildJsonObject {
             put("model", config.model)
             put("stream", true)
@@ -123,7 +126,7 @@ class LlmClient(
                     add(
                         buildJsonObject {
                             put("role", message.role)
-                            if (message.images.isEmpty()) {
+                            if (message.images.isEmpty() && message.files.isEmpty()) {
                                 // Some servers reject an empty string content alongside tool calls.
                                 put("content", message.content)
                             } else {
@@ -140,6 +143,17 @@ class LlmClient(
                                                 put("type", "image_url")
                                                 putJsonObject("image_url") {
                                                     put("url", "data:image/jpeg;base64,$data")
+                                                }
+                                            }
+                                        )
+                                    }
+                                    message.files.forEach { part ->
+                                        add(
+                                            buildJsonObject {
+                                                put("type", "file")
+                                                putJsonObject("file") {
+                                                    put("filename", part.fileName)
+                                                    put("file_data", "data:${part.mimeType};base64,${part.base64}")
                                                 }
                                             }
                                         )
@@ -194,7 +208,7 @@ class LlmClient(
         return StreamEvent.Completed(
             Message(
                 role = "assistant",
-                content = message["content"]?.jsonPrimitive?.contentOrEmpty(),
+                content = message["content"]?.jsonPrimitive.contentOrEmpty(),
                 toolCalls = parseToolCalls(message["tool_calls"]),
             )
         )
@@ -216,17 +230,17 @@ class LlmClient(
                 if (raw is JsonArray) {
                     raw.forEachIndexed { position, element ->
                         val call = element.jsonObject
-                        val index = call["index"]?.jsonPrimitive?.contentOrEmpty()?.toIntOrNull() ?: position
+                        val index = call["index"]?.jsonPrimitive.contentOrEmpty().toIntOrNull() ?: position
                         val partial = calls.getOrPut(index) {
-                            PartialCall(call["id"]?.jsonPrimitive?.contentOrEmpty().ifEmpty { "call_$index" })
+                            PartialCall(call["id"]?.jsonPrimitive.contentOrEmpty().ifEmpty { "call_$index" })
                         }
                         val function = call["function"]?.jsonObject
-                        function?.get("name")?.jsonPrimitive?.contentOrEmpty()?.let { if (it.isNotEmpty()) partial.name = it }
-                        function?.get("arguments")?.jsonPrimitive?.contentOrEmpty()?.let { partial.arguments.append(it) }
+                        function?.get("name")?.jsonPrimitive.contentOrEmpty().let { if (it.isNotEmpty()) partial.name = it }
+                        function?.get("arguments")?.jsonPrimitive.contentOrEmpty().let { partial.arguments.append(it) }
                     }
                 }
             }
-            return delta["content"]?.jsonPrimitive?.contentOrEmpty().also { content.append(it) }
+            return delta["content"]?.jsonPrimitive.contentOrEmpty().also { content.append(it) }
         }
 
         fun toMessage(): Message = Message(
@@ -249,18 +263,16 @@ class LlmClient(
         return array.mapIndexedNotNull { index, raw ->
             val call = raw as? JsonObject ?: return@mapIndexedNotNull null
             val function = call["function"]?.jsonObject ?: return@mapIndexedNotNull null
-            val name = function["name"]?.jsonPrimitive?.contentOrEmpty()
+            val name = function["name"]?.jsonPrimitive.contentOrEmpty()
             if (name.isBlank()) return@mapIndexedNotNull null
             ToolCall(
-                id = call["id"]?.jsonPrimitive?.contentOrEmpty().ifBlank { "call_$index" },
+                id = call["id"]?.jsonPrimitive.contentOrEmpty().ifBlank { "call_$index" },
                 name = name,
-                arguments = function["arguments"]?.jsonPrimitive?.contentOrEmpty().ifBlank { "{}" },
+                arguments = function["arguments"]?.jsonPrimitive.contentOrEmpty().ifBlank { "{}" },
             )
         }
     }
 
-    private fun kotlinx.serialization.json.JsonPrimitive?.contentOrEmpty(): String =
-        if (this == null || this is kotlinx.serialization.json.JsonNull) "" else content
 
     companion object {
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()

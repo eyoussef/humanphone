@@ -10,34 +10,36 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dev.humanagent.HumanPhoneApp
 import dev.humanagent.MainActivity
+import dev.humanagent.R
+import dev.humanagent.llm.LlmClient
+import dev.humanagent.llm.Message
+import dev.humanagent.llm.SettingsStore
+import dev.humanagent.llm.StreamEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Keeps the assistant alive: the floating dot, the live agent loop, and the notification that lets
+ * Keeps the assistant alive: the live agent loop and the notification that lets
  * the user halt whatever the phone is doing.
  */
 class AgentService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var engine: AgentLoop? = null
-    private var bubble: OverlayBubble? = null
-    private var listenJob: Job? = null
+
+    /** Decisions already taken, to skip duplicate notifications and reply loops. */
+    private val lastAutoHandled = mutableMapOf<String, Long>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -54,72 +56,101 @@ class AgentService : Service() {
             loop.state.collect { state ->
                 _loop.value = state
                 _running.value = state.running
-                bubble?.setLabel(if (state.running) "•••" else "HP")
                 notifyStatus(
                     when {
                         state.error != null -> state.error
-                        state.running -> state.liveText.ifBlank { "Working…" }
-                        else -> state.lastReply.ifBlank { "Ready when you are." }
+                        state.running -> state.liveText.ifBlank { getString(R.string.notification_working) }
+                        else -> state.lastReply.ifBlank { getString(R.string.notification_ready) }
                     }
                 )
             }
         }
 
-        if (Settings.canDrawOverlays(this)) installBubble()
+        // Auto mode tracks the switch in settings; the bus feeds it notifications.
+        scope.launch {
+            app.settingsStore.settings.collect { settings -> _autoMode.value = settings.autoMode }
+        }
+        scope.launch {
+            NotificationBus.events.collect { event -> handleNotificationEvent(app.settingsStore, event) }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_HALT -> engine?.halt()
-            ACTION_RUN -> {
-                installBubble()
-                intent.getStringExtra(EXTRA_COMMAND)?.let { command -> engine?.run(command) }
-            }
-            else -> installBubble()
+            ACTION_RUN -> intent.getStringExtra(EXTRA_COMMAND)?.let { command -> engine?.run(command) }
+            else -> Unit
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
-        listenJob?.cancel()
         engine?.shutdown()
-        bubble?.hide()
         scope.cancel()
         instance = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 
-    private fun installBubble() {
-        if (bubble?.isShowing == true) return
-        bubble = OverlayBubble(
-            context = this,
-            onTap = { openApp() },
-            onLongPress = { listenForCommand() },
-        ).also { it.show() }
+    /** Classifies one notification and, when a reply is warranted, hands it to the agent. */
+    private suspend fun handleNotificationEvent(settingsStore: SettingsStore, event: NotificationEvent) {
+        val settings = settingsStore.current()
+        if (!settings.autoMode) return
+        if (_running.value) return // never interrupt a task the user started
+
+        val now = System.currentTimeMillis()
+        val fingerprint = "${event.packageName}|${event.title}|${event.text.take(120)}"
+        synchronized(lastAutoHandled) {
+            lastAutoHandled.entries.removeAll { it.value < now - AUTO_COOLDOWN_MS }
+            if (lastAutoHandled.containsKey(fingerprint)) return
+        }
+        val decision = runCatching { classify(event) }.getOrNull() ?: return
+        synchronized(lastAutoHandled) {
+            lastAutoHandled[fingerprint] = System.currentTimeMillis()
+            // A reply puts the app on cooldown: our own outgoing echo must not loop us.
+            if (decision.isReply) lastAutoHandled["app:" + event.packageName] = System.currentTimeMillis()
+        }
+        if (!decision.isReply) return
+
+        notifyStatus("Auto mode · ${decision.app.ifBlank { event.appName }}: ${decision.note}")
+        engine?.run(autoCommand(event, decision))
     }
 
-    private fun openApp() {
-        runCatching {
-            startActivity(
-                Intent(this, MainActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            )
+    /** One cheap model call: does this notification deserve a reply, and what should it say? */
+    private suspend fun classify(event: NotificationEvent): AutoDecision {
+        val settings = HumanPhoneApp.instance.settingsStore.current()
+        val config = settings.toProviderConfig()
+        if (!config.isUsable) return AutoDecision(AutoDecision.SKIP, "", "", "No model configured.")
+        val prompt = buildString {
+            appendLine("New notification:")
+            appendLine(NotificationBus.describe(event))
+            appendLine()
+            appendLine("Decide now and answer with the JSON object only.")
         }
+        val answer = StringBuilder()
+        var finalText: String? = null
+        LlmClient(config).stream(
+            listOf(Message.system(AutoModePrompts.SYSTEM), Message.user(prompt)),
+        ).collect { streamEvent ->
+            when (streamEvent) {
+                is StreamEvent.TextDelta -> answer.append(streamEvent.text)
+                is StreamEvent.Completed -> finalText = streamEvent.message.content
+                is StreamEvent.Failure -> Unit
+            }
+        }
+        val raw = finalText?.takeIf { it.isNotBlank() } ?: answer.toString()
+        return AutoDecision.parse(raw)
     }
 
-    private fun listenForCommand() {
-        val app = HumanPhoneApp.instance
-        listenJob?.cancel()
-        bubble?.setLabel("🎙")
-        app.voice.startListening()
-        listenJob = scope.launch {
-            val heard = withTimeoutOrNull(LISTEN_TIMEOUT_MS) { app.voice.heard.first() }
-            app.voice.stopListening()
-            bubble?.setLabel("HP")
-            if (!heard.isNullOrBlank()) engine?.run(heard)
+    /** The instruction the agent loop gets when Auto mode decided to answer. */
+    private fun autoCommand(event: NotificationEvent, decision: AutoDecision): String =
+        buildString {
+            append("Auto task: a notification arrived in ${event.appName}")
+            if (event.title.isNotBlank()) append(" — ${event.title}")
+            append(". Send this reply on my behalf: \"${decision.replyText}\". ")
+            append("Open ${decision.app.ifBlank { event.appName }}, find the conversation, send the message, then finish. ")
+            append("If you cannot reach the conversation within a few steps, finish and say why.")
         }
-    }
 
     private fun startInForeground(text: String) {
         createChannel()
@@ -159,7 +190,7 @@ class AgentService : Service() {
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(open)
-            .addAction(0, "Halt", halt)
+            .addAction(0, getString(R.string.notification_halt), halt)
             .build()
     }
 
@@ -169,10 +200,10 @@ class AgentService : Service() {
         manager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                "Assistant",
+                getString(R.string.channel_agent_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "HumanPhone task status and the floating dot."
+                description = getString(R.string.channel_agent_description)
                 setShowBadge(false)
             }
         )
@@ -185,7 +216,12 @@ class AgentService : Service() {
 
         private const val CHANNEL_ID = "humanphone_agent"
         private const val NOTIFICATION_ID = 4711
-        private const val LISTEN_TIMEOUT_MS = 15_000L
+
+        /** One auto decision per app in this window: our own replies must not loop back to us. */
+        private const val AUTO_COOLDOWN_MS = 120_000L
+
+        private val _autoMode = MutableStateFlow(false)
+        val autoMode: StateFlow<Boolean> = _autoMode.asStateFlow()
 
         private val _loop = MutableStateFlow(AgentRunState())
         val loop: StateFlow<AgentRunState> = _loop.asStateFlow()
@@ -196,7 +232,7 @@ class AgentService : Service() {
         @Volatile
         private var instance: AgentService? = null
 
-        /** Starts the foreground service (and the floating dot when the user allowed overlays). */
+        /** Starts the foreground service (the user-initiated on-device agent loop). */
         fun start(context: Context) {
             runCatching {
                 ContextCompat.startForegroundService(context, Intent(context, AgentService::class.java))
@@ -219,7 +255,7 @@ class AgentService : Service() {
             }
         }
 
-        /** Stops the running task but keeps the service and the dot. */
+        /** Stops the running task but keeps the service up. */
         fun halt(context: Context) {
             instance?.engine?.halt()
         }

@@ -3,15 +3,17 @@
 package dev.humanagent.ui
 
 import android.Manifest
+import android.app.LocaleManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
+import android.os.LocaleList
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -35,10 +38,13 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -50,15 +56,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import dev.humanagent.R
 import dev.humanagent.agent.AgentAccessibilityService
 import dev.humanagent.agent.AgentService
 import dev.humanagent.llm.AppSettings
 import dev.humanagent.llm.ProviderKind
 import dev.humanagent.llm.SettingsStore
+import dev.humanagent.llm.SttMode
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
@@ -91,6 +100,10 @@ fun SettingsScreen(settingsStore: SettingsStore) {
     var temperature by remember(loaded.temperature) { mutableStateOf(loaded.temperature.toFloat()) }
     var maxSteps by remember(loaded.maxSteps) { mutableStateOf(loaded.maxSteps.toFloat()) }
     var stepDelay by remember(loaded.stepDelayMs) { mutableStateOf(loaded.stepDelayMs.toFloat()) }
+    var sttBaseUrl by remember(loaded.sttBaseUrl) { mutableStateOf(loaded.sttBaseUrl) }
+    var sttApiKey by remember(loaded.sttApiKey) { mutableStateOf(loaded.sttApiKey) }
+    var sttModel by remember(loaded.sttModel) { mutableStateOf(loaded.sttModel) }
+    var sttLanguage by remember(loaded.sttLanguage) { mutableStateOf(loaded.sttLanguage) }
 
     fun write(transform: (AppSettings) -> AppSettings) {
         scope.launch { settingsStore.update(transform) }
@@ -118,7 +131,6 @@ fun SettingsScreen(settingsStore: SettingsStore) {
 
     var accessibilityOn by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     var accessibilityConnected by remember { mutableStateOf(AgentAccessibilityService.isConnected()) }
-    var overlayOn by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var batteryOn by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
     var notificationsOn by remember { mutableStateOf(areNotificationsAllowed(context)) }
     var micOn by remember { mutableStateOf(hasPermission(context, Manifest.permission.RECORD_AUDIO)) }
@@ -128,7 +140,6 @@ fun SettingsScreen(settingsStore: SettingsStore) {
     fun refreshPermissions() {
         accessibilityOn = isAccessibilityServiceEnabled(context)
         accessibilityConnected = AgentAccessibilityService.isConnected()
-        overlayOn = Settings.canDrawOverlays(context)
         batteryOn = isIgnoringBatteryOptimizations(context)
         notificationsOn = areNotificationsAllowed(context)
         micOn = hasPermission(context, Manifest.permission.RECORD_AUDIO)
@@ -154,6 +165,75 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        SectionCard(title = stringResource(R.string.language_title)) {
+            var showLanguageDialog by remember { mutableStateOf(false) }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.app_language),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        text = languageOptions
+                            .firstOrNull { it.first == loaded.language }
+                            ?.second
+                            ?: stringResource(R.string.language_system_default),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                OutlinedButton(onClick = { showLanguageDialog = true }) {
+                    Text(stringResource(R.string.change_language))
+                }
+            }
+            if (showLanguageDialog) {
+                AlertDialog(
+                    onDismissRequest = { showLanguageDialog = false },
+                    title = { Text(stringResource(R.string.app_language)) },
+                    text = {
+                        Column {
+                            languageOptions.forEach { (tag, label) ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showLanguageDialog = false
+                                            write { it.copy(language = tag) }
+                                            applyAppLanguage(context, tag)
+                                        },
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(
+                                        selected = loaded.language == tag,
+                                        onClick = {
+                                            showLanguageDialog = false
+                                            write { it.copy(language = tag) }
+                                            applyAppLanguage(context, tag)
+                                        },
+                                    )
+                                    Text(
+                                        text = if (tag.isBlank()) {
+                                            stringResource(R.string.language_system_default)
+                                        } else {
+                                            label
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showLanguageDialog = false }) {
+                            Text(stringResource(R.string.done))
+                        }
+                    },
+                )
+            }
+        }
+
         SectionCard(title = "Provider") {
             Row(
                 modifier = Modifier
@@ -275,6 +355,98 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             )
         }
 
+        SectionCard(title = "Speech to text") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SttMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = loaded.sttMode == mode,
+                        onClick = { write { it.copy(sttMode = mode) } },
+                        label = { Text(mode.label) },
+                    )
+                }
+            }
+            if (loaded.sttMode == SttMode.REMOTE) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    sttPresets.forEach { preset ->
+                        FilterChip(
+                            selected = sttBaseUrl == preset.baseUrl && sttModel == preset.model,
+                            onClick = {
+                                sttBaseUrl = preset.baseUrl
+                                sttModel = preset.model
+                                write { it.copy(sttBaseUrl = preset.baseUrl, sttModel = preset.model) }
+                            },
+                            label = { Text(preset.label) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = sttBaseUrl,
+                    onValueChange = { value ->
+                        sttBaseUrl = value
+                        write { it.copy(sttBaseUrl = value) }
+                    },
+                    label = { Text("Base URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    supportingText = {
+                        Text("Root of the OpenAI-compatible endpoint; recorded audio is posted to /audio/transcriptions")
+                    },
+                )
+                OutlinedTextField(
+                    value = sttApiKey,
+                    onValueChange = { value ->
+                        sttApiKey = value
+                        write { it.copy(sttApiKey = value) }
+                    },
+                    label = { Text("API key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                    supportingText = { Text("Optional for a local server") },
+                )
+                OutlinedTextField(
+                    value = sttModel,
+                    onValueChange = { value ->
+                        sttModel = value
+                        write { it.copy(sttModel = value) }
+                    },
+                    label = { Text("Transcription model") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = sttLanguage,
+                    onValueChange = { value ->
+                        sttLanguage = value
+                        write { it.copy(sttLanguage = value) }
+                    },
+                    label = { Text("Language") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    supportingText = {
+                        Text("Optional language code such as en or ar; empty lets the server detect it")
+                    },
+                )
+            } else {
+                Text(
+                    text = "Dictation uses the phone's own recogniser, so it needs no endpoint or key.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         SectionCard(title = "Agent") {
             SwitchRow(
                 title = "Attach screenshots",
@@ -336,20 +508,6 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                 },
             )
             PermissionRow(
-                title = "Display over other apps",
-                detail = "Draws the assistant bubble on top of the app being operated.",
-                granted = overlayOn,
-                actionLabel = "Open",
-                onAction = {
-                    systemSettingsLauncher.launch(
-                        Intent(
-                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            Uri.fromParts("package", context.packageName, null),
-                        ),
-                    )
-                },
-            )
-            PermissionRow(
                 title = "Ignore battery optimisation",
                 detail = "Stops Android from freezing the assistant in the middle of a task.",
                 granted = batteryOn,
@@ -372,7 +530,7 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             )
             PermissionRow(
                 title = "Microphone",
-                detail = "Dictate chat messages and agent commands.",
+                detail = "Dictate chat messages and agent commands; remote mode uploads a short recording to the configured endpoint.",
                 granted = micOn,
                 actionLabel = "Allow",
                 actionEnabled = !micOn,
@@ -517,6 +675,15 @@ private fun shouldAdoptDefault(
     }
 }
 
+/** One-tap endpoint and model pairs for the transcription providers people actually use. */
+private val sttPresets = listOf(
+    SttPreset(label = "OpenAI", baseUrl = "https://api.openai.com/v1", model = "whisper-1"),
+    SttPreset(label = "Groq", baseUrl = "https://api.groq.com/openai/v1", model = "whisper-large-v3-turbo"),
+    SttPreset(label = "Local server", baseUrl = "http://127.0.0.1:8080/v1", model = "whisper-1"),
+)
+
+private data class SttPreset(val label: String, val baseUrl: String, val model: String)
+
 private fun hasPermission(context: Context, permission: String): Boolean =
     ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
@@ -536,4 +703,31 @@ private fun isAccessibilityServiceEnabled(context: Context): Boolean {
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
     ) ?: return false
     return enabled.split(':').any { it.equals(component, ignoreCase = true) }
+}
+
+/** Languages the interface ships with; shown in their own alphabet, so they never need translating. */
+private val languageOptions: List<Pair<String, String>> = listOf(
+    "" to "System default",
+    "en" to "English",
+    "ar" to "العربية",
+    "fr" to "Français",
+    "es" to "Español",
+    "pt" to "Português",
+    "hi" to "हिन्दी",
+)
+
+/**
+ * Applies the per-app interface language. Android 13+ keeps the choice in the system and recreates
+ * the app right away; on older releases the app stays on the system language.
+ */
+private fun applyAppLanguage(context: Context, languageTag: String) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    runCatching {
+        val localeManager = context.getSystemService(LocaleManager::class.java) ?: return
+        localeManager.applicationLocales = if (languageTag.isBlank()) {
+            LocaleList.getEmptyLocaleList()
+        } else {
+            LocaleList.forLanguageTags(languageTag)
+        }
+    }
 }

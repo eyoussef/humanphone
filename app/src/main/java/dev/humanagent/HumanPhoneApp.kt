@@ -38,6 +38,8 @@ class HumanPhoneApp : Application() {
         scope.launch {
             memory.load()
             chatEngine.refresh()
+            // Every settings emission re-points voice input at the chosen speech-to-text backend.
+            settingsStore.settings.collect { voice.updateConfig(it.toSttConfig()) }
         }
     }
 

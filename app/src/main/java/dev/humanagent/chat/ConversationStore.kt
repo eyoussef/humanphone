@@ -10,11 +10,22 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/** A file the user attached to a turn, already copied into app storage. */
+@Serializable
+data class Attachment(
+    val name: String,
+    val mimeType: String,
+    val kind: String, // "image" | "text" | "file"
+    val path: String, // absolute path inside app storage
+    val sizeBytes: Long = 0L,
+)
+
 @Serializable
 data class ChatTurn(
     val role: String,
     val text: String,
     val timestampMs: Long,
+    val attachments: List<Attachment> = emptyList(),
 )
 
 @Serializable

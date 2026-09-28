@@ -1,0 +1,63 @@
+<resources>
+    <string name="accessibility_label">Operador HumanPhone</string>
+    <string name="accessibility_description">Permite que HumanPhone lea la pantalla, toque, escriba, desplace y navegue aplicaciones en tu nombre, igual que una persona usando el teléfono.</string>
+    <string name="channel_agent_name">Asistente</string>
+    <string name="channel_agent_description">Muestra el estado de la tarea en curso.</string>
+
+    <string name="tab_chat">Chat</string>
+    <string name="tab_agent">Agente</string>
+    <string name="tab_settings">Ajustes</string>
+    <string name="open_settings">Ajustes</string>
+
+    <string name="new_chat">Nuevo chat</string>
+    <string name="delete_conversation">Eliminar %1$s</string>
+    <string name="message_placeholder">Mensaje</string>
+    <string name="no_messages_yet">Aún no hay mensajes</string>
+    <string name="empty_hint_type">Escribe abajo o toca el micrófono para dictar. Las respuestas se leen en voz alta cuando el altavoz está activado.</string>
+    <string name="empty_hint_do">Envía \"%1$s &lt;task&gt;\" para que el asistente lo haga en el propio teléfono.</string>
+    <string name="status_listening">Escuchando…</string>
+    <string name="status_thinking">Pensando…</string>
+    <string name="status_speaking">Hablando…</string>
+    <string name="status_working_phone">Trabajando en el teléfono…</string>
+    <string name="attach_photo">Adjuntar una foto</string>
+    <string name="attach_file">Adjuntar un archivo</string>
+    <string name="send_reply">Enviar</string>
+    <string name="cancel_reply">Cancelar la respuesta</string>
+    <string name="dictate_message">Dictar un mensaje</string>
+    <string name="stop_dictating">Dejar de dictar</string>
+    <string name="spoken_replies_on">Respuestas habladas activadas</string>
+    <string name="spoken_replies_off">Respuestas habladas desactivadas</string>
+    <string name="loading_settings">Cargando ajustes…</string>
+    <string name="no_model_selected">Ningún modelo elegido — abre los ajustes</string>
+
+    <string name="agent_title">Agente</string>
+    <string name="agent_subtitle">Ejecuta una tarea en este teléfono mediante el servicio de accesibilidad.</string>
+    <string name="agent_service">Servicio del agente</string>
+    <string name="service_running">Servicio en primer plano en marcha</string>
+    <string name="service_stopped">Servicio en primer plano detenido</string>
+    <string name="auto_mode">Modo auto</string>
+    <string name="auto_mode_detail">Lee las notificaciones nuevas y responde a las que merecen respuesta.</string>
+    <string name="agent_engine_streaming">El chat está transmitiendo — el agente espera al modelo.</string>
+    <string name="working_on_phone">Trabajando en el teléfono.</string>
+    <string name="idle_state">Inactivo.</string>
+    <string name="model_output">Salida del modelo</string>
+    <string name="last_reply">Última respuesta</string>
+    <string name="trace_title">Registro</string>
+    <string name="command_label">Comando</string>
+    <string name="command_hint">p. ej. Escribe a Alex que llego tarde</string>
+    <string name="run_task">Ejecutar</string>
+    <string name="halt_task">Parar</string>
+    <string name="dictate_command">Dictar un comando</string>
+    <string name="no_steps_yet">Aún no hay pasos. Escribe un comando o toca el micrófono para dictarlo.</string>
+
+    <string name="language_title">Idioma</string>
+    <string name="app_language">Idioma de la aplicación</string>
+    <string name="app_language_detail">Cambia el idioma de la interfaz. Requiere Android 13 o más reciente.</string>
+    <string name="change_language">Cambiar</string>
+    <string name="done">Hecho</string>
+    <string name="language_system_default">Idioma del sistema</string>
+
+    <string name="notification_halt">Detener</string>
+    <string name="notification_ready">Listo cuando quieras.</string>
+    <string name="notification_working">Trabajando…</string>
+</resources>

@@ -2,6 +2,7 @@ package dev.humanagent.agent
 
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 
 /** One addressable thing on screen. [index] is stable for a given dump, not across dumps. */
 data class UiElement(
@@ -24,6 +25,13 @@ data class UiElement(
     val top: Int,
     val right: Int,
     val bottom: Int,
+)
+
+/** A text match together with the index the current dump prints for it. */
+data class TextMatch(
+    val index: Int,
+    val node: AccessibilityNodeInfo,
+    val label: String,
 )
 
 data class ScreenSnapshot(
@@ -59,6 +67,7 @@ object ScreenSnapshotRenderer {
         nodeCount: Int,
         truncated: Boolean,
         elements: List<UiElement>,
+        windowCount: Int = 1,
     ): String {
         val header = buildString {
             append("Screen: ")
@@ -69,6 +78,7 @@ object ScreenSnapshotRenderer {
             append(" nodes, ")
             append(elements.size)
             append(" addressable")
+            if (windowCount > 1) append(", ").append(windowCount).append(" windows")
             if (truncated) append(", truncated")
             append(")")
         }
@@ -107,22 +117,35 @@ object ScreenSnapshotRenderer {
 }
 
 /**
- * Reads the accessibility tree in a deterministic pre-order walk. [snapshot] and [locate] share the
- * same traversal and node budget, which is what makes the indices printed for the model addressable.
+ * Reads every interactive window — the app, but also the bottom sheets, dialogs and pickers that
+ * live in their own windows — in one deterministic pre-order walk. [snapshot], [locate] and the
+ * text lookups all share that walk, which is what makes the indices printed for the model
+ * addressable by [locate].
  */
 class ScreenReader(private val service: AgentAccessibilityService) {
 
     fun snapshot(maxNodes: Int = MAX_NODES): ScreenSnapshot {
-        val root = service.rootInActiveWindowSafe() ?: return ScreenSnapshot.empty()
+        val roots = orderedRoots()
+        if (roots.isEmpty()) return ScreenSnapshot.empty()
         val elements = ArrayList<UiElement>(64)
         var visited = 0
-        walk(root, maxNodes) { index, node, _ ->
+        var windowsRead = 0
+        var primaryWindow = -1
+        var currentWindow = -1
+        walkWindows(roots, maxNodes) { index, node, windowIndex ->
             visited++
+            if (windowIndex != currentWindow) {
+                currentWindow = windowIndex
+                windowsRead++
+                if (primaryWindow < 0) primaryWindow = windowIndex
+            }
             describe(index, node)?.let { elements.add(it) }
         }
-        val packageName = runCatching { root.packageName?.toString().orEmpty() }.getOrDefault("")
+        if (primaryWindow < 0) return ScreenSnapshot.empty()
+        val primary = roots[primaryWindow]
+        val packageName = runCatching { primary.packageName?.toString().orEmpty() }.getOrDefault("")
         val appLabel = applicationLabel(packageName)
-        val windowTitle = runCatching { root.window?.title?.toString().orEmpty() }.getOrDefault("")
+        val windowTitle = runCatching { primary.window?.title?.toString().orEmpty() }.getOrDefault("")
         return ScreenSnapshot(
             appLabel = appLabel,
             windowTitle = windowTitle,
@@ -130,35 +153,83 @@ class ScreenReader(private val service: AgentAccessibilityService) {
             nodeCount = visited,
             truncated = visited >= maxNodes,
             elements = elements,
-            rendered = ScreenSnapshotRenderer.render(appLabel, windowTitle, visited, visited >= maxNodes, elements),
+            rendered = ScreenSnapshotRenderer.render(
+                appLabel = appLabel,
+                windowTitle = windowTitle,
+                nodeCount = visited,
+                truncated = visited >= maxNodes,
+                elements = elements,
+                windowCount = windowsRead,
+            ),
         )
     }
 
     fun locate(index: Int, maxNodes: Int = MAX_NODES): AccessibilityNodeInfo? {
-        val root = service.rootInActiveWindowSafe() ?: return null
-        walk(root, maxNodes) { candidate, node, _ ->
+        val roots = orderedRoots()
+        if (roots.isEmpty()) return null
+        walkWindows(roots, maxNodes) { candidate, node, _ ->
             if (candidate == index) return node
         }
         return null
     }
 
-    /** Finds the first node whose text or content description contains [query]. */
+    /** Finds the first node whose text, content description or hint contains [query]. */
     fun findByText(query: String, maxNodes: Int = MAX_NODES): AccessibilityNodeInfo? {
         val needle = query.trim().lowercase()
         if (needle.isEmpty()) return null
-        val root = service.rootInActiveWindowSafe() ?: return null
-        walk(root, maxNodes) { _, node, _ ->
-            val text = runCatching { node.text?.toString().orEmpty() }.getOrDefault("")
-            val description = runCatching { node.contentDescription?.toString().orEmpty() }.getOrDefault("")
-            if (text.lowercase().contains(needle) || description.lowercase().contains(needle)) return node
+        val roots = orderedRoots()
+        if (roots.isEmpty()) return null
+        walkWindows(roots, maxNodes) { _, node, _ ->
+            if (labelOf(node).lowercase().contains(needle)) return node
         }
         return null
     }
 
+    /** Finds the first node whose label satisfies [predicate], used for label-shaped searches. */
+    fun findByLabel(predicate: (String) -> Boolean, maxNodes: Int = MAX_NODES): AccessibilityNodeInfo? {
+        val roots = orderedRoots()
+        if (roots.isEmpty()) return null
+        walkWindows(roots, maxNodes) { _, node, _ ->
+            val label = labelOf(node)
+            if (label.isNotEmpty() && predicate(label)) return node
+        }
+        return null
+    }
+
+    /**
+     * Every node whose label contains [query] with the index the dump prints for it, ordered by
+     * exact label first, then shorter label, then screen order.
+     */
+    fun findMatches(query: String, maxMatches: Int = 8, maxNodes: Int = MAX_NODES): List<TextMatch> {
+        val needle = query.trim().lowercase()
+        if (needle.isEmpty() || maxMatches <= 0) return emptyList()
+        val roots = orderedRoots()
+        if (roots.isEmpty()) return emptyList()
+        val matches = ArrayList<TextMatch>(16)
+        walkWindows(roots, maxNodes) { index, node, _ ->
+            if (matches.size >= 400) return@walkWindows
+            val label = labelOf(node)
+            if (label.lowercase().contains(needle)) {
+                matches.add(TextMatch(index = index, node = node, label = label))
+            }
+        }
+        matches.sortWith(
+            compareBy<TextMatch> { if (it.label.trim().equals(query.trim(), ignoreCase = true)) 0 else 1 }
+                .thenBy { it.label.length }
+                .thenBy { it.index }
+        )
+        return matches.take(maxMatches)
+    }
+
+    /** The nodes matching [query], in the same order as [findMatches]. */
+    fun findAllByText(query: String, maxMatches: Int = 8): List<AccessibilityNodeInfo> =
+        findMatches(query, maxMatches).map { it.node }
+
     fun focusedEditable(maxNodes: Int = MAX_NODES): AccessibilityNodeInfo? {
-        val root = service.rootInActiveWindowSafe() ?: return null
+        val roots = orderedRoots()
+        if (roots.isEmpty()) return null
         var firstEditable: AccessibilityNodeInfo? = null
-        walk(root, maxNodes) { _, node, _ ->
+        walkWindows(roots, maxNodes) { _, node, _ ->
             val editable = runCatching { node.isEditable }.getOrDefault(false)
             if (editable) {
                 if (runCatching { node.isFocused }.getOrDefault(false)) return node
@@ -170,9 +241,10 @@ class ScreenReader(private val service: AgentAccessibilityService) {
 
     /** The scrollable container to prefer, favouring the one that currently has focus. */
     fun scrollableNode(maxNodes: Int = MAX_NODES): AccessibilityNodeInfo? {
-        val root = service.rootInActiveWindowSafe() ?: return null
+        val roots = orderedRoots()
+        if (roots.isEmpty()) return null
         var firstScrollable: AccessibilityNodeInfo? = null
-        walk(root, maxNodes) { _, node, _ ->
+        walkWindows(roots, maxNodes) { _, node, _ ->
             val scrollable = runCatching { node.isScrollable }.getOrDefault(false)
             if (scrollable) {
                 if (runCatching { node.isFocused }.getOrDefault(false)) return node
@@ -180,6 +252,33 @@ class ScreenReader(private val service: AgentAccessibilityService) {
             }
         }
         return firstScrollable
+    }
+
+    /** Every scrollable container in dump order, so a specific strip can be scrolled on its own. */
+    fun scrollableNodes(maxNodes: Int = MAX_NODES): List<AccessibilityNodeInfo> {
+        val roots = orderedRoots()
+        if (roots.isEmpty()) return emptyList()
+        val found = ArrayList<AccessibilityNodeInfo>(8)
+        walkWindows(roots, maxNodes) { _, node, _ ->
+            if (runCatching { node.isScrollable }.getOrDefault(false)) found.add(node)
+        }
+        return found
+    }
+
+    /** App label and package of the window the user is looking at, without building a whole dump. */
+    fun foregroundApp(): Pair<String, String> {
+        val primary = orderedRoots().firstOrNull() ?: return "" to ""
+        val packageName = runCatching { primary.packageName?.toString().orEmpty() }.getOrDefault("")
+        return applicationLabel(packageName) to packageName
+    }
+
+    /** The label the model sees for a node: its text, else its description, else its hint. */
+    fun labelOf(node: AccessibilityNodeInfo): String {
+        val text = runCatching { node.text?.toString().orEmpty() }.getOrDefault("").trim()
+        if (text.isNotEmpty()) return text
+        val description = runCatching { node.contentDescription?.toString().orEmpty() }.getOrDefault("").trim()
+        if (description.isNotEmpty()) return description
+        return runCatching { node.hintText?.toString().orEmpty() }.getOrDefault("").trim()
     }
 
     /** Walks up until something clickable is found, which is how real fingers hit small icons. */
@@ -194,9 +293,85 @@ class ScreenReader(private val service: AgentAccessibilityService) {
         return null
     }
 
+    fun boundsOf(node: AccessibilityNodeInfo): Rect = Rect().also { runCatching { node.getBoundsInScreen(it) } }
+
     fun centerOf(node: AccessibilityNodeInfo): Pair<Int, Int> {
-        val rect = Rect().also { runCatching { node.getBoundsInScreen(it) } }
+        val rect = boundsOf(node)
         return rect.centerX() to rect.centerY()
+    }
+
+    /**
+     * The roots of every interactive window, most recently focused first, so the topmost window and
+     * the app itself are read before anything they cover.
+     */
+    private fun orderedRoots(): List<AccessibilityNodeInfo> {
+        val windows: List<AccessibilityWindowInfo> = runCatching { service.windows }.getOrNull().orEmpty()
+        val ordered = if (windows.size <= 1) {
+            windows
+        } else {
+            windows.sortedWith(
+                compareByDescending<AccessibilityWindowInfo> { runCatching { it.isActive }.getOrDefault(false) }
+                    .thenByDescending { runCatching { it.isFocused }.getOrDefault(false) }
+                    .thenByDescending { runCatching { it.layer }.getOrDefault(0) }
+            )
+        }
+        val roots = ArrayList<AccessibilityNodeInfo>(ordered.size)
+        ordered.forEach { window ->
+            runCatching { window.root }.getOrNull()?.let { roots.add(it) }
+        }
+        if (roots.isEmpty()) {
+            service.rootInActiveWindowSafe()?.let { roots.add(it) }
+        }
+        return roots
+    }
+
+    /**
+     * The single traversal: every window root in order, each walked in pre-order down to
+     * [MAX_DEPTH], stopping at [maxNodes] nodes read and skipping nodes that repeat an earlier one
+     * (same class, bounds and text, typical when a window is reported twice).
+     */
+    private inline fun walkWindows(
+        roots: List<AccessibilityNodeInfo>,
+        maxNodes: Int,
+        visit: (index: Int, node: AccessibilityNodeInfo, windowIndex: Int) -> Unit,
+    ) {
+        if (maxNodes <= 0) return
+        val seen = HashSet<String>(256)
+        var index = 0
+        var visited = 0
+        for ((windowIndex, root) in roots.withIndex()) {
+            if (visited >= maxNodes) return
+            val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+            stack.addLast(root to 0)
+            while (stack.isNotEmpty() && visited < maxNodes) {
+                val (node, depth) = stack.removeLast()
+                visited++
+                if (isDistinct(node, seen)) {
+                    visit(index, node, windowIndex)
+                    index++
+                }
+                if (depth < MAX_DEPTH) {
+                    val childCount = runCatching { node.childCount }.getOrDefault(0)
+                    for (position in childCount - 1 downTo 0) {
+                        val child = runCatching { node.getChild(position) }.getOrNull() ?: continue
+                        stack.addLast(child to depth + 1)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun isDistinct(node: AccessibilityNodeInfo, seen: MutableSet<String>): Boolean {
+        val rect = boundsOf(node)
+        val key = buildString(48) {
+            append(runCatching { node.className?.toString().orEmpty() }.getOrDefault(""))
+            append('|')
+            append(rect.left).append(',').append(rect.top).append(',')
+            append(rect.right).append(',').append(rect.bottom)
+            append('|')
+            append(runCatching { node.text?.toString().orEmpty() }.getOrDefault(""))
+        }
+        return seen.add(key)
     }
 
     private fun applicationLabel(packageName: String): String {
@@ -248,32 +423,8 @@ class ScreenReader(private val service: AgentAccessibilityService) {
         )
     }.getOrNull()
 
-    private inline fun walk(
-        root: AccessibilityNodeInfo,
-        maxNodes: Int,
-        visit: (index: Int, node: AccessibilityNodeInfo, depth: Int) -> Unit,
-    ) {
-        val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
-        stack.addLast(root to 0)
-        var index = 0
-        var visited = 0
-        while (stack.isNotEmpty() && visited < maxNodes) {
-            val (node, depth) = stack.removeLast()
-            visited++
-            visit(index, node, depth)
-            index++
-            if (depth < MAX_DEPTH) {
-                val childCount = runCatching { node.childCount }.getOrDefault(0)
-                for (position in childCount - 1 downTo 0) {
-                    val child = runCatching { node.getChild(position) }.getOrNull() ?: continue
-                    stack.addLast(child to depth + 1)
-                }
-            }
-        }
-    }
-
     companion object {
-        const val MAX_NODES = 320
+        const val MAX_NODES = 500
         const val MAX_DEPTH = 30
     }
 }
