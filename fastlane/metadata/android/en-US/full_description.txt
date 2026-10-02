@@ -15,4 +15,6 @@ Nothing leaves the device except the requests to those endpoints: screen content
 
 Requires Android 11 or newer. For the operator, Android also needs the HumanPhone accessibility service enabled (Settings, Apps, HumanPhone, Restricted settings).
 
+Heads-up: the operator performs real actions on your device - taps, typing, calls, texts, alarms. What it does depends entirely on the model you connect and what you ask it to do, and models make mistakes. Watch each run live, start with simple tasks, and use it on your own responsibility.
+
 HumanPhone is free software, licensed under the GPL-3.0-or-later.
