@@ -296,10 +296,10 @@ class ChatEngine(
         append("when they ask for an action without it, answer and remind them of the \"$DO_PREFIX\" shortcut once.\n")
         append("- The user can attach photos and documents to a message; they arrive with it, so look at them before answering.\n")
         append("- Keep replies short, warm and spoken-friendly: they may be read out loud.\n")
-        val notes = memory.snapshot()
-        if (notes.isNotEmpty()) {
-            append("\nWhat you remember about this user:\n")
-            append(notes.entries.joinToString("\n") { "- ${it.key}: ${it.value}" })
+        val twin = memory.render()
+        if (twin.isNotEmpty()) {
+            append('\n')
+            append(twin)
         }
     }
 

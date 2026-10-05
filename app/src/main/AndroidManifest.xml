@@ -13,6 +13,13 @@
     <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!-- Lets Settings list the installed TTS engines so the user can pick one without a default. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <application
         android:localeConfig="@xml/locales_config"
         android:name=".HumanPhoneApp"

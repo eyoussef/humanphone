@@ -2,6 +2,7 @@ package dev.humanagent
 
 import android.app.Application
 import dev.humanagent.agent.MemoryStore
+import dev.humanagent.agent.RunLedger
 import dev.humanagent.chat.ChatEngine
 import dev.humanagent.llm.SettingsStore
 import dev.humanagent.voice.Speaker
@@ -18,6 +19,8 @@ class HumanPhoneApp : Application() {
         private set
     lateinit var memory: MemoryStore
         private set
+    lateinit var ledger: RunLedger
+        private set
     lateinit var speaker: Speaker
         private set
     lateinit var voice: VoiceIO
@@ -32,11 +35,13 @@ class HumanPhoneApp : Application() {
         instance = this
         settingsStore = SettingsStore(this)
         memory = MemoryStore(this)
-        speaker = Speaker(this)
+        ledger = RunLedger(this)
+        speaker = Speaker(this, settingsStore)
         voice = VoiceIO(this)
         chatEngine = ChatEngine(this, settingsStore, speaker, memory)
         scope.launch {
             memory.load()
+            ledger.load()
             chatEngine.refresh()
             // Every settings emission re-points voice input at the chosen speech-to-text backend.
             settingsStore.settings.collect { voice.updateConfig(it.toSttConfig()) }

@@ -2,7 +2,12 @@ HumanPhone puts a language model in charge of your phone. It is a chat client th
 
 Two surfaces, one app:
 
-* Chat: streaming conversations with image and file attachments, and replies read out loud with the on-device text-to-speech voice.
+* Chat: streaming conversations with image and file attachments, and replies read out loud with the
+on-device text-to-speech voice (any installed voice engine — you pick it in Settings), or with an
+API voice from an OpenAI-compatible /audio/speech
+endpoint (OpenAI, Groq, a local server) when you choose one in Settings. From Settings you can
+also install the on-device voice data, see whether the phone's recogniser is available, open the
+voice input settings to install or switch one, and test both speech features without leaving the app.
 * Operator: enable the HumanPhone accessibility service and hand a typed task to an agent loop that reads the visible screen and performs real taps, text entry, scrolling and app navigation until the task is done. Every step is shown live, and a run can be cancelled at any time. Auto mode goes further: new notifications are watched and answered on your behalf when a person actually needs a reply, while promotions, newsletters and one-time codes are skipped.
 
 There is no HumanPhone account, no vendor backend and no telemetry. The app only talks to the model endpoints you configure: a local Ollama server, OpenRouter, or any OpenAI-compatible base URL with /chat/completions. An optional OpenAI-compatible /audio/transcriptions endpoint (for example Whisper) turns dictation into text; without it the phone's own speech recogniser is used.

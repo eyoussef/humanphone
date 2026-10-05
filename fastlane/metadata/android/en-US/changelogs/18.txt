@@ -1,0 +1,12 @@
+Why nothing ran in Auto mode — three silent deaths, now fixed and made loud:
+
+* A verdict wrapped by the model ("```json {…} ```", or prose around it) could not be read and
+  silently became a skip — every notification, every time, with no trace anywhere. The reader
+  now lifts the JSON out.
+* A model that could not be reached was swallowed in silence. Classification now retries once
+  and the status notification says what happened: "could not reach the model — nothing answered".
+* After Android or a reboot cleared the app from memory, a notification could not even wake the
+  monitor: the wake check read a stale Auto-mode flag in the fresh process. The accessibility
+  service now reads the setting itself, so any notification revives the watch again.
+* Every step of the chain is visible now: "Heard a notification from …", "Busy — queued",
+  "Skip: …", "Verdict: …" — on the status notification and in logcat (tag HumanPhoneAuto).

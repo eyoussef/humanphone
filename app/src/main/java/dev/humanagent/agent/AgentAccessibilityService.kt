@@ -10,6 +10,7 @@ import android.hardware.HardwareBuffer
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import android.util.Log
 import android.util.DisplayMetrics
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
@@ -17,10 +18,16 @@ import android.view.accessibility.AccessibilityNodeInfo
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
+import dev.humanagent.BuildConfig
+import dev.humanagent.HumanPhoneApp
 
 /**
  * The eyes and hands of the assistant. It never reacts to events; instead the agent loop asks it
@@ -33,10 +40,23 @@ class AgentAccessibilityService : AccessibilityService() {
         Thread(runnable, "humanphone-screenshot")
     }
 
+    /**
+     * The accessibility service owns its own view of Auto mode: a fresh process starts with the
+     * companion flag unset, and without this subscription a notification could not even wake
+     * the monitor. Subscribed from [onServiceConnected], read directly from [onAccessibilityEvent].
+     */
+    @Volatile
+    private var autoModeOn = false
+
+    private var settingsScope: CoroutineScope? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         serviceInfo = (serviceInfo ?: AccessibilityServiceInfo()).apply {
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+            eventTypes = (serviceInfo?.eventTypes ?: 0) or
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = flags or
                 AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
@@ -45,6 +65,20 @@ class AgentAccessibilityService : AccessibilityService() {
             notificationTimeout = 200
         }
         instance = this
+        settingsScope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { scope ->
+            scope.launch {
+                (application as? HumanPhoneApp)?.settingsStore?.settings?.collect { settings ->
+                    autoModeOn = settings.autoMode
+                    // Auto mode without a monitor is deaf: keep the agent service up whenever
+                    // the setting says on. This also wakes it after Android tore the service
+                    // down or restarted the process — the system rebinds the accessibility
+                    // service, which re-subscribes here and starts the monitor again.
+                    if (settings.autoMode && AgentService.instance == null) {
+                        AgentService.start(this@AgentAccessibilityService)
+                    }
+                }
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -52,8 +86,22 @@ class AgentAccessibilityService : AccessibilityService() {
         // agent service over the in-process bus. Filtering (own app, silence, duplicates)
         // happens on the receiving side.
         if (event == null) return
-        val notificationEvent = NotificationBus.fromAccessibilityEvent(this, event, packageName)
-        if (notificationEvent != null) NotificationBus.publish(notificationEvent)
+        val notificationEvent = NotificationBus.fromAccessibilityEvent(this, event, packageName) ?: return
+        // The bus feeds Auto mode alone; while it is off nobody listens and notifications must
+        // not pile up in the queue.
+        if (!autoModeOn && !AgentService.autoMode.value) return
+        if (BuildConfig.DEBUG) {
+            Log.i(
+                "HumanPhoneAuto",
+                "Heard a notification from ${notificationEvent.packageName}: ${notificationEvent.title.take(80)}",
+            )
+        }
+        // Publish *before* waking the monitor: the bus buffers the event until the service's
+        // collector attaches, so the notification that woke the agent service is the first one
+        // it handles instead of being lost. The wake test uses this service's own fresh reading
+        // of the setting plus the running monitor's flag.
+        NotificationBus.publish(notificationEvent)
+        if (AgentService.instance == null) AgentService.start(this)
     }
 
     override fun onInterrupt() = Unit
@@ -65,6 +113,8 @@ class AgentAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        settingsScope?.cancel()
+        settingsScope = null
         screenshotExecutor.shutdownNow()
         super.onDestroy()
     }

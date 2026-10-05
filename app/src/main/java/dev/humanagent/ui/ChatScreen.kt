@@ -106,6 +106,7 @@ fun ChatScreen(
     val partial by voice.partial.collectAsState()
     val voiceStatus by voice.status.collectAsState()
     val speaking by speaker.speaking.collectAsState()
+    val speakerError by speaker.error.collectAsState()
     // The agent half runs through the service: its state feeds the in-chat task indicator.
     val agentLoop by AgentService.loop.collectAsState()
 
@@ -361,7 +362,7 @@ fun ChatScreen(
             }
         }
 
-        if (streaming || listening || speaking || voiceStatus.isNotBlank() || agentLoop.running) {
+        if (streaming || listening || speaking || voiceStatus.isNotBlank() || speakerError.isNotBlank() || agentLoop.running) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -380,6 +381,7 @@ fun ChatScreen(
                         agentLoop.running -> {
                             agentLoop.liveText.ifBlank { stringResource(R.string.status_working_phone) }
                         }
+                        speakerError.isNotBlank() -> speakerError
                         voiceStatus.isNotBlank() -> voiceStatus
                         listening -> if (partial.isBlank()) stringResource(R.string.status_listening) else partial
                         streaming -> stringResource(R.string.status_thinking)
