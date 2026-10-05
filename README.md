@@ -1,5 +1,7 @@
 # HumanPhone
 
+
+![HumanPhone](docs/HumanPhone.png)
 An Android app that puts a language model in charge of your phone: a chat client that can also
 read the screen and tap, type, scroll and navigate on your behalf, exactly like a person using
 the phone.
