@@ -1,0 +1,17 @@
+Choose which on-device voice engine speaks.
+
+* Settings → Voice now lists every installed TTS engine as a chip; the app speaks with the
+  chosen engine, no system default needed — the failure "no default TTS engine" is a thing of
+  the past.
+* "Install voice data" is aimed at the chosen engine, so its own language packs open instead
+  of the default engine's.
+* If a chosen engine fails to come up, the app falls back to the system default once and says
+  so in the status line.
+
+Auto mode really listens now:
+
+* The accessibility service's screen-watching update had silenced the notification stream
+  (its own update dropped the notification event type), so Auto mode heard nothing and
+  answered nobody. It is restored: notifications reach the watchdog again.
+* Notifications that arrive while the agent is busy with a task are queued and replayed when
+  the task ends, so Auto mode answers the messages it overheard instead of dropping them.

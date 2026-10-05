@@ -113,7 +113,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (isFinishing) AgentService.stop(this)
+        // Auto mode keeps the monitor alive after the app is gone; only a plain exit stops it.
+        if (isFinishing && !AgentService.autoMode.value) AgentService.stop(this)
         super.onDestroy()
     }
 }

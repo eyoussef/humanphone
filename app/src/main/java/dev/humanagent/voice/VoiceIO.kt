@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,8 +16,11 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
+import dev.humanagent.llm.SettingsStore
+import dev.humanagent.llm.TtsMode
 import java.io.File
 import java.util.Locale
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,10 +30,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 /**
  * The single [Handler] of this file. `SpeechRecognizer` and `TextToSpeech` are main-thread only, so
@@ -161,6 +171,9 @@ class VoiceIO(private val context: Context) {
         // Recognizer-specific events (language switches, hotword matches) are not used.
         override fun onEvent(eventType: Int, params: Bundle?) {}
     }
+
+    /** Whether the phone has a speech recogniser the app can drive, shown in Settings. */
+    fun sttStatus(): SttStatus = SttStatus(recognitionAvailable = SpeechRecognizer.isRecognitionAvailable(context))
 
     /**
      * Starts a recognition session. Without the RECORD_AUDIO permission this is a no-op and
@@ -376,6 +389,8 @@ class VoiceIO(private val context: Context) {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
+        // The configured speech language steers the recogniser too; empty follows the system setup.
+        if (config.language.isNotBlank()) putExtra(RecognizerIntent.EXTRA_LANGUAGE, config.language)
     }
 
     private fun scheduleRestart() {
@@ -403,81 +418,229 @@ class VoiceIO(private val context: Context) {
     }
 }
 
+/** What the phone's own speech features can do right now, shown in the Settings engine cards. */
+data class SttStatus(val recognitionAvailable: Boolean)
+
+data class TtsStatus(
+    val engineLabel: String,
+    val ready: Boolean,
+    val languageTag: String,
+    val languageAvailable: Boolean,
+    val problem: String?,
+)
+
+/** An installed on-device TTS engine, e.g. Google Speech Services or Samsung TTS. */
+data class TtsEngineEntry(val label: String, val packageName: String)
+
 /**
- * Voice output built on [TextToSpeech]. [say] flushes whatever is currently being spoken and
- * [speaking] tracks the engine's own progress reports. If no usable TTS engine is present the
- * speaker degrades to a silent no-op instead of failing the caller.
+ * Every installed TTS engine, sorted by label. Reads the TTS services straight from the package
+ * manager, so it works even when no engine is set as the system default yet.
  */
-class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
+fun installedTtsEngines(context: Context): List<TtsEngineEntry> {
+    val intent = Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE)
+    val resolved = runCatching { context.packageManager.queryIntentServices(intent, 0) }.getOrDefault(emptyList())
+    return resolved.mapNotNull { info ->
+        val packageName = info.serviceInfo?.packageName ?: return@mapNotNull null
+        TtsEngineEntry(
+            label = runCatching { info.loadLabel(context.packageManager).toString() }.getOrDefault(packageName),
+            packageName = packageName,
+        )
+    }.distinctBy { it.packageName }.sortedBy { it.label.lowercase() }
+}
 
-    private val _speaking = MutableStateFlow(false)
+/**
+ * Voice output: the phone's own [TextToSpeech] voice, or speech fetched from the configured
+ * OpenAI-compatible `/audio/speech` endpoint and played back. [say] always replaces whatever is
+ * currently playing; when the chosen engine cannot speak, the problem is reported through [error]
+ * instead of failing the caller.
+ */
+class Speaker(
+    private val context: Context,
+    settingsStore: SettingsStore,
+) : TextToSpeech.OnInitListener {
 
-    /** True while the engine is actually rendering an utterance. */
-    val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    private val _localSpeaking = MutableStateFlow(false)
+    private val _remoteSpeaking = MutableStateFlow(false)
+
+    /** True while either engine is actually rendering an utterance. */
+    val speaking: StateFlow<Boolean> = combine(_localSpeaking, _remoteSpeaking) { local, remote -> local || remote }
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    private val _error = MutableStateFlow("")
+
+    /** The last thing that stopped a spoken reply, or empty while the last one sounded. */
+    val error: StateFlow<String> = _error.asStateFlow()
+
+    @Volatile
+    private var ttsConfig = TtsConfig()
 
     private var engine: TextToSpeech? = null
     private var ready = false
     private var available = true
     private var pending: String? = null
 
+    /** The engine the active [TextToSpeech] was actually built with; empty means the system default. */
+    private var currentEnginePackage = ""
+
+    /** True once a chosen engine failed to come up and the system default was tried instead. */
+    private var fallbackTried = false
+
+    /** Why the on-device voice cannot speak with the configured language, or null while it can. */
+    private var localProblem: String? = null
+
+    private var remoteJob: Job? = null
+    private var remoteToken = Any()
+
     /** Engines throw on utterances longer than this, so a long reply is cut down to fit. */
     private val maxUtteranceChars = TextToSpeech.getMaxSpeechInputLength()
 
-    private val progress = object : UtteranceProgressListener() {
+    private val localSpeakingListener = object : UtteranceProgressListener() {
 
         override fun onStart(utteranceId: String?) {
-            _speaking.value = true
+            _localSpeaking.value = true
         }
 
         override fun onDone(utteranceId: String?) {
-            _speaking.value = false
+            _localSpeaking.value = false
         }
 
         @Deprecated("Deprecated in Java")
         override fun onError(utteranceId: String?) {
-            _speaking.value = false
+            _localSpeaking.value = false
         }
 
         override fun onError(utteranceId: String?, errorCode: Int) {
-            _speaking.value = false
+            _localSpeaking.value = false
         }
 
         override fun onStop(utteranceId: String?, interrupted: Boolean) {
-            _speaking.value = false
+            _localSpeaking.value = false
         }
     }
+
+    private val remote = RemoteSpeechFetcher()
+
+    private val player = SpeechPlayer { playing -> _remoteSpeaking.value = playing }
 
     init {
         // Building the engine touches the TTS service, so it starts on the main thread.
         onMainThread { startEngine() }
+        // Every settings emission re-points the speaker at the chosen voice engine.
+        scope.launch {
+            settingsStore.settings.collect { updateTtsConfig(it.toTtsConfig()) }
+        }
+    }
+
+    /** Re-points the speaker at the chosen engine; safe to call from any thread. */
+    fun updateTtsConfig(config: TtsConfig) {
+        val engineChanged = ttsConfig.enginePackage != config.enginePackage
+        ttsConfig = config
+        onMainThread {
+            if (ready) applyLanguage()
+            // A different on-device voice was picked: rebuild so the next utterance uses it.
+            if (engineChanged) rebuildEngine()
+        }
+    }
+
+    /** What the on-device voice can speak right now, shown in the Settings engine card. */
+    fun ttsStatus(): TtsStatus {
+        val active = engine
+        if (active == null || !ready) {
+            return TtsStatus(
+                engineLabel = "",
+                ready = false,
+                languageTag = ttsConfig.language,
+                languageAvailable = false,
+                problem = if (available) {
+                    "The text-to-speech engine is still starting."
+                } else {
+                    "No text-to-speech engine on this phone."
+                },
+            )
+        }
+        val wanted = ttsLocale(ttsConfig.language)
+        val supported = speakable(active.isLanguageAvailable(wanted))
+        return TtsStatus(
+            engineLabel = engineLabelOf(active),
+            ready = true,
+            languageTag = ttsConfig.language,
+            languageAvailable = supported,
+            problem = if (supported) null else "Voice data for ${wanted.displayLanguage} is not installed on the phone.",
+        )
+    }
+
+    /** The human name of the default TTS engine, e.g. "Google Speech Services". */
+    private fun engineLabelOf(active: TextToSpeech): String {
+        val default = runCatching { active.defaultEngine }.getOrDefault("")
+        return runCatching { active.engines }
+            .getOrDefault(emptyList())
+            .firstOrNull { it.name == default }?.label ?: default
     }
 
     /**
-     * Speaks [text], replacing anything already queued. Blank text is ignored. Text handed over
-     * before the engine finished initialising is spoken as soon as it is ready.
+     * Speaks [text], replacing anything already playing from either engine. Blank text is ignored.
+     * Text handed over before the engine finished initialising is spoken as soon as it is ready.
      */
     fun say(text: String) {
         val clean = text.trim()
         if (clean.isEmpty()) return
         onMainThread {
-            if (!available) return@onMainThread
-            if (ready) {
-                speakNow(clean)
+            cancelRemote()
+            stopLocal()
+            if (ttsConfig.isRemoteUsable) {
+                speakRemotely(clean)
             } else {
-                startEngine()
-                if (!available) return@onMainThread
-                pending = clean
+                if (ttsConfig.mode == TtsMode.REMOTE) {
+                    fail("The API voice is not configured; speaking with the on-device voice.")
+                }
+                speakLocally(clean)
             }
         }
     }
 
-    /** Stops playback and shuts the engine down. [say] is a no-op afterwards. */
+    /**
+     * Speaks [text] through the configured engine and reports why nothing sounded, for the test
+     * button in Settings. The local engine needs a moment to come up, so it is waited for.
+     */
+    suspend fun probe(text: String): Result<Unit> = withContext(Dispatchers.Main) {
+        val clean = text.trim().ifEmpty { "HumanPhone voice test." }
+        cancelRemote()
+        stopLocal()
+        if (ttsConfig.isRemoteUsable) {
+            val file = newSpeechFile()
+            remote.audio(ttsConfig, clean, file).fold(
+                onSuccess = { audio ->
+                    val played = player.play(audio)
+                    audio.delete()
+                    if (played.isSuccess) _error.value = ""
+                    played
+                },
+                onFailure = { failure -> Result.failure(failure) },
+            )
+        } else {
+            if (!awaitLocalReady()) {
+                return@withContext Result.failure(IllegalStateException("No text-to-speech engine on this phone."))
+            }
+            applyLanguage()
+            localProblem?.let { return@withContext Result.failure(IllegalStateException(it)) }
+            if (!speakNow(clean)) {
+                return@withContext Result.failure(IllegalStateException("The phone's voice refused the utterance."))
+            }
+            _error.value = ""
+            Result.success(Unit)
+        }
+    }
+
+    /** Stops both engines and shuts them down. [say] is a no-op afterwards. */
     fun destroy() {
         onMainThread {
             available = false
             ready = false
             pending = null
-            _speaking.value = false
+            _localSpeaking.value = false
+            _remoteSpeaking.value = false
             val active = engine
             engine = null
             if (active != null) {
@@ -492,23 +655,40 @@ class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
                     // The engine is gone already.
                 }
             }
+            player.destroy()
         }
+        remoteJob?.cancel()
+        remoteJob = null
+        scope.cancel()
     }
 
     override fun onInit(status: Int) {
         onMainThread {
             val active = engine
             if (status != TextToSpeech.SUCCESS || active == null) {
+                // A failing chosen engine falls back to the system default once, then gives up.
+                if (!fallbackTried && !currentEnginePackage.isNullOrBlank()) {
+                    fallbackTried = true
+                    shutdownEngine()
+                    available = true
+                    startEngine()
+                    return@onMainThread
+                }
                 available = false
                 ready = false
                 pending = null
-                _speaking.value = false
+                _localSpeaking.value = false
                 return@onMainThread
             }
-            active.setOnUtteranceProgressListener(progress)
-            active.setLanguage(Locale.US)
-            active.setSpeechRate(SPEECH_RATE)
+            // An init callback from an engine that was replaced meanwhile: ignore it.
+            if (engine !== active) {
+                runCatching { active.shutdown() }
+                return@onMainThread
+            }
+            runCatching { active.setOnUtteranceProgressListener(localSpeakingListener) }
+            runCatching { active.setSpeechRate(SPEECH_RATE) }
             ready = true
+            applyLanguage()
             val queued = pending
             pending = null
             if (queued != null) speakNow(queued)
@@ -517,26 +697,275 @@ class Speaker(private val context: Context) : TextToSpeech.OnInitListener {
 
     private fun startEngine() {
         if (engine != null || !available) return
+        currentEnginePackage = if (fallbackTried) "" else ttsConfig.enginePackage
+        val chosen = currentEnginePackage
+            .takeIf { it.isNotBlank() && engineInstalled(it) }
+            .orEmpty()
+        if (currentEnginePackage.isNotBlank() && chosen.isEmpty()) {
+            // The chosen engine was uninstalled since; fall through to the system default.
+            currentEnginePackage = ""
+        }
         try {
-            engine = TextToSpeech(context, this)
+            engine = if (chosen.isBlank()) {
+                TextToSpeech(context, this)
+            } else {
+                TextToSpeech(context, this, chosen)
+            }
         } catch (e: Exception) {
             available = false
         }
     }
 
-    private fun speakNow(text: String) {
+    private fun engineInstalled(packageName: String): Boolean =
+        runCatching { context.packageManager.getPackageInfo(packageName, 0) }.isSuccess
+
+    /** Stops and discards the active engine so a later [startEngine] builds a fresh one. */
+    private fun shutdownEngine() {
+        val active = engine
+        engine = null
+        ready = false
+        pending = null
+        _localSpeaking.value = false
+        if (active != null) {
+            try {
+                active.stop()
+            } catch (e: IllegalStateException) {
+                // The engine is gone already.
+            }
+            try {
+                active.shutdown()
+            } catch (e: IllegalStateException) {
+                // The engine is gone already.
+            }
+        }
+    }
+
+    private fun rebuildEngine() {
+        fallbackTried = false
+        shutdownEngine()
+        available = true
+        startEngine()
+    }
+
+    private fun speakLocally(text: String) {
+        if (!available) {
+            fail("No text-to-speech engine on this phone.")
+            return
+        }
+        if (!ready) {
+            startEngine()
+            if (!available) {
+                fail("No text-to-speech engine on this phone.")
+                return
+            }
+            pending = text
+            return
+        }
+        val problem = localProblem
+        if (problem != null) fail(problem) else _error.value = ""
+        if (!speakNow(text)) fail("The phone's voice refused the utterance.")
+    }
+
+    /** Applies the configured speech language; an unsupported one falls back to the system default. */
+    private fun applyLanguage() {
         val active = engine ?: return
+        val wanted = ttsLocale(ttsConfig.language)
+        if (speakable(active.setLanguage(wanted))) {
+            localProblem = null
+            return
+        }
+        val fallback = ttsLocale("", fallback = Locale.US)
+        localProblem = if (speakable(active.setLanguage(fallback))) {
+            "No on-device voice for ${wanted.displayLanguage}; speaking with the ${fallback.displayLanguage} voice."
+        } else {
+            "No text-to-speech voice is installed on this phone."
+        }
+    }
+
+    private fun speakable(result: Int): Boolean =
+        result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED
+
+    private fun speakNow(text: String): Boolean {
+        val active = engine ?: return false
         val utterance = if (text.length > maxUtteranceChars) text.take(maxUtteranceChars) else text
         val result = try {
             active.speak(utterance, TextToSpeech.QUEUE_FLUSH, Bundle(), UTTERANCE_ID)
         } catch (e: IllegalStateException) {
             TextToSpeech.ERROR
         }
-        _speaking.value = result != TextToSpeech.ERROR
+        _localSpeaking.value = result != TextToSpeech.ERROR
+        return _localSpeaking.value
     }
+
+    private suspend fun awaitLocalReady(): Boolean {
+        if (ready) return true
+        startEngine()
+        val deadline = SystemClock.elapsedRealtime() + LOCAL_READY_TIMEOUT_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (ready) return true
+            if (!available) return false
+            delay(100)
+        }
+        return ready
+    }
+
+    /** Fetches the utterance, then plays it; a newer [say] supersedes this one through [remoteToken]. */
+    private fun speakRemotely(text: String) {
+        val config = ttsConfig
+        val token = Any()
+        remoteToken = token
+        val fetchJob = scope.launch {
+            val file = newSpeechFile()
+            val fetched = try {
+                remote.audio(config, text, file)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                file.delete()
+                throw e
+            } catch (e: Exception) {
+                Result.failure<File>(e)
+            }
+            if (remoteToken !== token) {
+                file.delete()
+                return@launch
+            }
+            fetched.fold(
+                onSuccess = { audio ->
+                    player.play(audio).fold(
+                        onSuccess = { _error.value = "" },
+                        onFailure = { failure -> fail("Could not play the API voice: ${reasonOf(failure)}") },
+                    )
+                    audio.delete()
+                },
+                onFailure = { failure -> fail("Could not fetch the API voice: ${reasonOf(failure)}") },
+            )
+        }
+        remoteJob = fetchJob
+    }
+
+    /** Cancels an in-flight remote utterance and silences the player; the next [say] takes over. */
+    private fun cancelRemote() {
+        remoteToken = Any()
+        remoteJob?.cancel()
+        remoteJob = null
+        player.stop()
+        _remoteSpeaking.value = false
+    }
+
+    private fun stopLocal() {
+        val active = engine
+        if (active != null) {
+            try {
+                active.stop()
+            } catch (e: IllegalStateException) {
+                // The engine was already torn down.
+            }
+        }
+        _localSpeaking.value = false
+    }
+
+    private fun newSpeechFile(): File = File(File(context.cacheDir, SPEECH_DIRECTORY), "speech-${System.currentTimeMillis()}.mp3")
+
+    private fun fail(message: String) {
+        _error.value = message
+    }
+
+    /** Engine failures carry a message; plain transport ones do not, so the class name stands in. */
+    private fun reasonOf(failure: Throwable): String =
+        failure.message?.takeIf { it.isNotBlank() } ?: failure.javaClass.simpleName
 
     private companion object {
         const val UTTERANCE_ID = "humanphone-speech"
         const val SPEECH_RATE = 1.0f
+        const val SPEECH_DIRECTORY = "voice"
+        const val LOCAL_READY_TIMEOUT_MS = 5_000L
+    }
+}
+
+/**
+ * Plays fetched speech files with [MediaPlayer]; every call is marshalled to the main looper, the
+ * same way the recognizer and the TTS engine are. A new [play] always stops the previous one.
+ */
+private class SpeechPlayer(private val onPlaying: (Boolean) -> Unit) {
+
+    private var player: MediaPlayer? = null
+
+    /** Plays [audio] and resolves the moment playback finished, failed or was stopped. */
+    suspend fun play(audio: File): Result<Unit> = suspendCancellableCoroutine { continuation ->
+        onMainThread {
+            release()
+            val fresh = try {
+                MediaPlayer()
+            } catch (e: Exception) {
+                null
+            }
+            if (fresh == null) {
+                if (continuation.isActive) continuation.resume(Result.failure(IllegalStateException("Could not start playback.")))
+                return@onMainThread
+            }
+            try {
+                fresh.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                fresh.setDataSource(audio.absolutePath)
+            } catch (e: Exception) {
+                fresh.release()
+                if (continuation.isActive) continuation.resume(Result.failure(IllegalStateException("Could not read the speech.")))
+                return@onMainThread
+            }
+            fresh.setOnPreparedListener { prepared ->
+                val started = runCatching { prepared.start() }.isSuccess
+                if (started) {
+                    onPlaying(true)
+                } else {
+                    shutDown()
+                    if (continuation.isActive) {
+                        continuation.resume(Result.failure(IllegalStateException("Playback failed to start.")))
+                    }
+                }
+            }
+            fresh.setOnCompletionListener {
+                shutDown()
+                if (continuation.isActive) continuation.resume(Result.success(Unit))
+            }
+            fresh.setOnErrorListener { _, what, extra ->
+                shutDown()
+                if (continuation.isActive) {
+                    continuation.resume(Result.failure(IllegalStateException("Playback failed ($what/$extra).")))
+                }
+                true
+            }
+            player = fresh
+            fresh.prepareAsync()
+            if (continuation.isActive) continuation.invokeOnCancellation { stop() }
+        }
+    }
+
+    /** Stops playback; the caller owns the file and may reuse the player afterwards. */
+    fun stop() {
+        onMainThread { release() }
+    }
+
+    fun destroy() = stop()
+
+    /** Releases the player and reports it as silent; the file stays untouched for cleanup. */
+    private fun release() {
+        val active = player
+        player = null
+        onPlaying(false)
+        if (active != null) {
+            try {
+                active.stop()
+            } catch (e: IllegalStateException) {
+                // Not in a stoppable state.
+            }
+            active.release()
+        }
+    }
+
+    private fun shutDown() {
+        release()
     }
 }

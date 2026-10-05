@@ -1,0 +1,8 @@
+Voice output choice and a language-aware local voice.
+
+* Voice engine: replies are spoken by the phone's own voice or by an OpenAI-compatible
+  /audio/speech endpoint (OpenAI, Groq, a local speech server) — base URL, key, model and voice
+  under Settings, with one-tap presets and a test button.
+* The on-device voice speaks the language set under Speech to text instead of always falling
+  back to English; missing voices fall back to the system's default voice and are reported.
+* A voice failure is shown in the chat status line instead of failing silently.

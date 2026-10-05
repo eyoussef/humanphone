@@ -176,6 +176,9 @@ fun AgentScreen(engineActive: Boolean) {
             Switch(
                 checked = settings?.autoMode == true,
                 onCheckedChange = { wanted ->
+                    // Enabling Auto mode puts the monitor in the background right away — the
+                    // watchdog listens (and answers) without the user ever typing a command.
+                    if (wanted) AgentService.start(context)
                     scope.launch { settingsStore.update { it.copy(autoMode = wanted) } }
                 },
             )

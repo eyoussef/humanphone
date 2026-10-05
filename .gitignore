@@ -10,3 +10,6 @@
 local.properties
 app/build/
 build/
+
+# Kotlin build cache
+.kotlin/

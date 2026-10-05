@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dev.humanagent.voice.SttConfig
+import dev.humanagent.voice.TtsConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -37,6 +38,25 @@ data class AppSettings(
     val language: String = "",
     /** Auto mode: the agent watches notifications and answers the ones that need a reply. */
     val autoMode: Boolean = false,
+    /**
+     * Optional limits for Auto mode: what the watchdog may answer for the user and for whom,
+     * e.g. "only messages from my family, in Arabic" or "only work e-mail about invoices".
+     */
+    val autoModePersona: String = "",
+    /** How replies are spoken: the phone's own TTS voice, or an OpenAI-compatible speech endpoint. */
+    val ttsMode: TtsMode = TtsMode.LOCAL,
+    val ttsBaseUrl: String = "https://api.openai.com/v1",
+    val ttsApiKey: String = "",
+    val ttsModel: String = "gpt-4o-mini-tts",
+    val ttsVoice: String = "alloy",
+    /** Package of the on-device TTS engine to speak with; empty uses the system default. */
+    val ttsEngine: String = "",
+    /**
+     * Let the assistant send texts directly when the SMS permission is granted. Off (default),
+     * a send opens the messaging app with the message pre-filled and the user presses send —
+     * the composer path costs one tap and needs no permission to message anyone.
+     */
+    val directSms: Boolean = false,
 ) {
     fun toProviderConfig(): ProviderConfig = ProviderConfig(
         kind = providerKind,
@@ -54,6 +74,17 @@ data class AppSettings(
         apiKey = sttApiKey,
         model = sttModel,
         language = sttLanguage,
+    )
+
+    /** The text-to-speech backend the next spoken reply should use. */
+    fun toTtsConfig(): TtsConfig = TtsConfig(
+        mode = ttsMode,
+        baseUrl = ttsBaseUrl,
+        apiKey = ttsApiKey,
+        model = ttsModel,
+        voice = ttsVoice,
+        language = sttLanguage,
+        enginePackage = ttsEngine,
     )
 
     companion object {
@@ -74,6 +105,15 @@ enum class SttMode(val label: String) {
     REMOTE("Remote Whisper API"),
 }
 
+/**
+ * Which engine speaks the replies: the phone's own [TextToSpeech] voice, or an
+ * OpenAI-compatible speech endpoint such as OpenAI, Groq or a local speech server.
+ */
+enum class TtsMode(val label: String) {
+    LOCAL("On-device"),
+    REMOTE("API provider"),
+}
+
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "humanphone_settings")
 
 class SettingsStore(private val context: Context) {
@@ -82,7 +122,10 @@ class SettingsStore(private val context: Context) {
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
         prefs[key]?.let { raw ->
-            runCatching { Json.decodeFromString<AppSettings>(raw) }.getOrNull()
+            // The blob is a sealed box on current installs; legacy plaintext still reads.
+            SecretVault.open(raw).getOrNull()?.let { payload ->
+                runCatching { Json.decodeFromString<AppSettings>(payload) }.getOrNull()
+            }
         } ?: AppSettings()
     }
 
@@ -90,10 +133,13 @@ class SettingsStore(private val context: Context) {
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         context.settingsDataStore.edit { prefs ->
-            val current = prefs[key]?.let { raw ->
-                runCatching { Json.decodeFromString<AppSettings>(raw) }.getOrNull()
+            val current = prefs[key]?.let { raw -> SecretVault.open(raw).getOrNull() }?.let { payload ->
+                runCatching { Json.decodeFromString<AppSettings>(payload) }.getOrNull()
             } ?: AppSettings()
-            prefs[key] = Json.encodeToString(transform(current))
+            val plain = Json.encodeToString(transform(current))
+            // Sealing is attempted on every write; a Keystore failure keeps the legacy
+            // plaintext path so the user's keys are never lost to a hardware hiccup.
+            prefs[key] = SecretVault.seal(plain).getOrDefault(plain)
         }
     }
 

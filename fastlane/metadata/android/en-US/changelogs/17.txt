@@ -1,0 +1,8 @@
+Auto mode hands the phone back:
+
+* After finishing a task the agent used to leave the messaging app open in front — WhatsApp
+  open in a chat posts no notifications for it, so the watchdog went deaf to the exact
+  conversation it had just answered in.
+* Now every finished run returns the phone home and brings HumanPhone back to the front:
+  notifications flow again, automatically, whether the run ended with finish or used up its
+  steps.

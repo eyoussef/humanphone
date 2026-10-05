@@ -28,6 +28,11 @@ data class AppEntry(val label: String, val packageName: String)
 class UiActionExecutor(
     private val service: AgentAccessibilityService,
     private val reader: ScreenReader,
+    /**
+     * The user's explicit opt-in for sending texts without a composer stop. Default off — the
+     * composer path is the safe default and needs no SMS permission at all.
+     */
+    private val directSms: Boolean = false,
 ) {
 
     private val appsCache = AtomicReference<List<AppEntry>?>(null)
@@ -83,6 +88,12 @@ class UiActionExecutor(
             "[${match.index}] ${classNameOf(node)} \"${match.label.take(80)}\" @$x,$y$flags"
         }
     }
+
+    /**
+     * True when some element on the current screen shows [query]; the evidence a promised
+     * message needs before confirm_delivered closes an obligation.
+     */
+    fun sees(query: String): Boolean = reader.findMatches(query, 1).isNotEmpty()
 
     /**
      * Scrolls until [query] is on screen: every swipe goes to the container most likely to hold it,
@@ -286,7 +297,7 @@ class UiActionExecutor(
     }
 
     fun sendSms(number: String, message: String): String {
-        val granted = ContextCompat.checkSelfPermission(service, Manifest.permission.SEND_SMS) ==
+        val granted = directSms && ContextCompat.checkSelfPermission(service, Manifest.permission.SEND_SMS) ==
             PackageManager.PERMISSION_GRANTED
         if (granted) {
             val sent = runCatching {
@@ -304,7 +315,7 @@ class UiActionExecutor(
             .putExtra("sms_body", message)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return if (start(composer)) {
-            "The SMS permission is not granted, so the message is pre-filled in the messaging app and the user has to press send."
+            "The message is pre-filled in the messaging app on $number; the user has to press send (direct sending is off in Settings)."
         } else {
             "Could not send or compose an SMS to $number."
         }

@@ -21,6 +21,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import okhttp3.OkHttpClient
 import okhttp3.Request
 
 /** What a tool produced. [includeScreen] appends a fresh screen dump so the model stays grounded. */
@@ -37,13 +38,18 @@ data class ToolOutcome(
 class AgentTools(
     private val context: Context,
     private val memory: MemoryStore,
+    private val ledger: RunLedger,
     private val speaker: Speaker,
     private val skills: SkillStore,
+    /** The owed-result obligation this run works off, or null for a task that owes nothing. */
+    private val obligation: Obligation? = null,
 ) {
 
     private val board = OfferBoard()
     private val workspace: SiteWorkspace by lazy { SiteWorkspace(context) }
     private val siteServer: SiteServer by lazy { SiteServer { workspace.currentDir() } }
+    private val confirmations = mutableMapOf<String, Int>()
+    private val refusedFinishes = mutableMapOf<String, Int>()
 
     val specs: List<ToolSpec> = buildList {
         add(
@@ -267,6 +273,19 @@ class AgentTools(
         )
         add(
             ToolSpec(
+                name = "remember_person",
+                description = "Remember who someone is to the user: how they relate (brother, manager...), where they talk (WhatsApp, SMS...), and how to treat them. Use it when a conversation reveals something durable about a person.",
+                parameters = schema(
+                    listOf("name"),
+                    "name" to stringProp("the person's name, e.g. Sam"),
+                    "relation" to stringProp("optional how they relate to the user, e.g. brother or manager"),
+                    "channel" to stringProp("optional where they talk, e.g. WhatsApp or SMS +212..."),
+                    "note" to stringProp("optional one durable line about them, e.g. prefers Arabic"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
                 name = "speak",
                 description = "Say something out loud to the user right now, for example while working on a long task.",
                 parameters = schema(listOf("text"), "text" to stringProp("sentence to speak")),
@@ -293,8 +312,15 @@ class AgentTools(
         add(
             ToolSpec(
                 name = "finish",
-                description = "End the task. Use it as soon as the goal is reached, blocked, or needs the user.",
+                description = "End the task. Use it as soon as the goal is reached, blocked, or needs the user. An owed result must be confirmed delivered first.",
                 parameters = schema(listOf("summary"), "summary" to stringProp("what happened, in one or two sentences")),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "confirm_delivered",
+                description = "Close an owed result: call it after the promised message is really sent and visible in the conversation, with the exact text you typed as the result. Verified against the screen; a second call is taken on faith.",
+                parameters = schema(listOf("result"), "result" to stringProp("the exact text of the delivered result message")),
             )
         )
         add(
@@ -439,17 +465,17 @@ class AgentTools(
                     memory.put(key, value)
                     ToolOutcome("Remembered: $key.", includeScreen = false)
                 }
-                "recall" -> {
-                    val notes = memory.snapshot()
-                    ToolOutcome(
-                        if (notes.isEmpty()) {
-                            "Nothing remembered yet."
-                        } else {
-                            notes.entries.joinToString("\n") { "- ${it.key}: ${it.value}" }
-                        },
-                        includeScreen = false,
+                "remember_person" -> {
+                    val name = requireString(args, "name")
+                    memory.rememberPerson(
+                        name,
+                        JsonArgs.string(args, "relation").orEmpty(),
+                        JsonArgs.string(args, "channel").orEmpty(),
+                        JsonArgs.string(args, "note").orEmpty(),
                     )
+                    ToolOutcome("Noted what you know about $name.", includeScreen = false)
                 }
+                "recall" -> ToolOutcome(memory.render(), includeScreen = false)
                 "speak" -> {
                     val text = requireString(args, "text")
                     if (settings.speakReplies) speaker.say(text)
@@ -505,7 +531,33 @@ class AgentTools(
                     siteServer.stop()
                     ToolOutcome("Preview server stopped.", includeScreen = false)
                 }
-                "finish" -> ToolOutcome(requireString(args, "summary"), terminal = true, includeScreen = false)
+                "confirm_delivered" -> confirmDelivered(requireString(args, "result"), executor)
+                "finish" -> {
+                    val summary = requireString(args, "summary")
+                    // The contract the task opened with is still standing: the result exists
+                    // and was never confirmed in the conversation it was promised to. finish
+                    // is refused twice so the model goes and sends it; the third call ends
+                    // the run and the watchdog picks the delivery up from the ledger.
+                    val owed = owedObligation()
+                    if (owed != null && (refusedFinishes[owed.id] ?: 0) < MAX_FINISH_REFUSALS) {
+                        val count = (refusedFinishes[owed.id] ?: 0) + 1
+                        refusedFinishes[owed.id] = count
+                        return ToolOutcome(
+                            "Not done: \"${owed.result.take(120)}\" was never sent to ${owed.destination}" +
+                                " in ${owed.app.ifBlank { "its app" }}. Reach that conversation, send it as a message," +
+                                " then call confirm_delivered with the exact text. Finish was refused $count of $MAX_FINISH_REFUSALS.",
+                            includeScreen = true,
+                        )
+                    }
+                    // The task is over, the phone must come back to where the assistant lives:
+                    // a messaging app left open in front suppresses its notifications, and the
+                    // watchdog would go deaf to the very conversation it just ran in.
+                    runCatching {
+                        executor.globalAction("home")
+                        executor.openApp("HumanPhone")
+                    }
+                    ToolOutcome(summary, terminal = true, includeScreen = false)
+                }
                 else -> ToolOutcome(
                     "There is no tool called \"${call.name}\". Available tools: " +
                         specs.joinToString(", ") { it.name },
@@ -520,6 +572,46 @@ class AgentTools(
             ToolOutcome(
                 "${call.name} did not go through: ${e.javaClass.simpleName}${e.message?.let { ": $it" }.orEmpty()}",
                 includeScreen = false,
+            )
+        }
+    }
+
+    /** The open owed-result obligation this run is bound to, read fresh from the ledger. */
+    private fun owedObligation(): Obligation? {
+        val active = obligation ?: return null
+        val entry = ledger.current(active.app, active.destination) ?: return null
+        return entry.takeIf { !it.delivered && it.result.isNotBlank() }
+    }
+
+    /**
+     * Closes an owed result. The first call is checked against the real screen: the message
+     * must be visible where it was promised. Only after a second call — the model insisting —
+     * is it accepted unseen, and the ledger says so in the episode.
+     */
+    private suspend fun confirmDelivered(result: String, executor: UiActionExecutor): ToolOutcome {
+        val owed = owedObligation()
+            ?: return ToolOutcome("Nothing is owed right now; confirm_delivered closes a promised result and there is none.", includeScreen = false)
+        ledger.setResult(owed.id, result)
+        val probe = result.trim().take(60)
+        val seen = probe.isNotBlank() && executor.sees(probe)
+        val attempts = (confirmations[owed.id] ?: 0) + 1
+        confirmations[owed.id] = attempts
+        return when {
+            seen -> {
+                ledger.markDelivered(owed.id)
+                ToolOutcome("Verified: \"$probe\" is visible on screen. The result was delivered.", includeScreen = false)
+            }
+            attempts >= 2 -> {
+                ledger.markDelivered(owed.id)
+                ToolOutcome(
+                    "Taken as delivered after your second confirmation — I could not see \"$probe\" on screen myself.",
+                    includeScreen = false,
+                )
+            }
+            else -> ToolOutcome(
+                "I do not see \"$probe\" on this screen. If it has not really been sent, send it into ${owed.destination} first;" +
+                    " if it has, call confirm_delivered once more and I will accept it without watching.",
+                includeScreen = true,
             )
         }
     }
@@ -580,13 +672,19 @@ class AgentTools(
 
     /** Downloads one image over HTTP and stores it in the site's images folder. */
     private fun downloadIntoSite(site: String?, url: String, fileName: String): String {
-        val request = Request.Builder().url(url).build()
-        LlmClient.sharedClient.newCall(request).execute().use { fetched ->
+        val scheme = url.trim().substringBefore(':').lowercase()
+        require(scheme == "http" || scheme == "https") { "download_image only takes http or https links" }
+        val request = downloadClient.newCall(
+            Request.Builder().url(url).build(),
+        ).execute().use { fetched ->
             require(fetched.isSuccessful) { "download failed with HTTP ${fetched.code}" }
             val body = fetched.body ?: throw IllegalArgumentException("empty download")
+            val type = body.contentType()
+            require(type == null || type.type == "image" || type.type == "application/octet-stream") {
+                "the link serves ${type ?: "unknown"} content, not an image"
+            }
             val bytes = body.bytes()
             require(bytes.size <= 10 * 1024 * 1024) { "the file is larger than 10 MB" }
-            val type = body.contentType()
             val extension = when {
                 fileName.contains('.') -> fileName.substringAfterLast('.')
                 type != null && type.type == "image" -> type.subtype
@@ -647,5 +745,19 @@ class AgentTools(
             else -> emptyList()
         }
         return raw.map { it.trim().removePrefix("-").trim() }.filter { it.isNotEmpty() }.take(40)
+    }
+
+    /** The shared OkHttp client for everything the loop itself downloads: strict and small. */
+    private val downloadClient: OkHttpClient =
+        LlmClient.sharedClient.newBuilder()
+            // A redirect could land on anything — a different host, a cleartext URL, an address
+            // the user never saw. One hop of trust only: the link the model gave is the link.
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+
+    companion object {
+        /** How often finish is refused while the owed result has not been confirmed. */
+        private const val MAX_FINISH_REFUSALS = 2
     }
 }

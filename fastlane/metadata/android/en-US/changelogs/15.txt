@@ -1,0 +1,9 @@
+Auto mode, continued:
+
+* A crash in the middle of a task can no longer leave the monitor stuck: every run —
+  finish, failure, halt or crash — visibly ends and Auto mode keeps listening.
+* A reply now blocks the same app for only a short moment (echo guard) instead of two
+  minutes, so a real back-and-forth conversation keeps going without being swallowed.
+* New "Auto mode" section in Settings: what the watchdog does and may answer, plus an
+  optional persona to limit or specialize it — e.g. "only messages from my family, in
+  Arabic" or "answer work e-mail during office hours".

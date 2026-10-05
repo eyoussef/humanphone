@@ -107,7 +107,13 @@ class SiteServer(private val rootProvider: () -> File) {
         val target = File(root, cleaned.ifEmpty { "index.html" }).canonicalFile
         val rootCanon = root.canonicalPath + File.separator
         if (!target.path.startsWith(rootCanon)) return File(root, "__refused__")
-        if (target.isDirectory) return File(target, "index.html")
+        if (target.isDirectory) {
+            // The leaf is resolved after the directory check, so it gets its own containment
+            // test too — a symlinked index.html inside a site directory must not lead outside.
+            val leaf = File(target, "index.html").canonicalFile
+            if (!leaf.path.startsWith(rootCanon)) return File(root, "__refused__")
+            return leaf
+        }
         return target
     }
 

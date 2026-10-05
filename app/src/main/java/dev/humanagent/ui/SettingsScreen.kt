@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.LocaleList
 import android.os.PowerManager
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -61,6 +63,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import dev.humanagent.HumanPhoneApp
 import dev.humanagent.R
 import dev.humanagent.agent.AgentAccessibilityService
 import dev.humanagent.agent.AgentService
@@ -68,6 +71,9 @@ import dev.humanagent.llm.AppSettings
 import dev.humanagent.llm.ProviderKind
 import dev.humanagent.llm.SettingsStore
 import dev.humanagent.llm.SttMode
+import dev.humanagent.llm.TtsMode
+import dev.humanagent.voice.TtsEngineEntry
+import dev.humanagent.voice.installedTtsEngines
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
@@ -80,6 +86,8 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(settingsStore: SettingsStore) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val voice = HumanPhoneApp.instance.voice
+    val speaker = HumanPhoneApp.instance.speaker
     val loaded = settingsStore.settings.collectAsState(initial = null).value
 
     if (loaded == null) {
@@ -96,6 +104,7 @@ fun SettingsScreen(settingsStore: SettingsStore) {
     var apiKey by remember(loaded.apiKey) { mutableStateOf(loaded.apiKey) }
     var model by remember(loaded.model) { mutableStateOf(loaded.model) }
     var persona by remember(loaded.persona) { mutableStateOf(loaded.persona) }
+    var autoPersona by remember(loaded.autoModePersona) { mutableStateOf(loaded.autoModePersona) }
     var maxTokensText by remember(loaded.maxTokens) { mutableStateOf(loaded.maxTokens.toString()) }
     var temperature by remember(loaded.temperature) { mutableStateOf(loaded.temperature.toFloat()) }
     var maxSteps by remember(loaded.maxSteps) { mutableStateOf(loaded.maxSteps.toFloat()) }
@@ -104,6 +113,10 @@ fun SettingsScreen(settingsStore: SettingsStore) {
     var sttApiKey by remember(loaded.sttApiKey) { mutableStateOf(loaded.sttApiKey) }
     var sttModel by remember(loaded.sttModel) { mutableStateOf(loaded.sttModel) }
     var sttLanguage by remember(loaded.sttLanguage) { mutableStateOf(loaded.sttLanguage) }
+    var ttsBaseUrl by remember(loaded.ttsBaseUrl) { mutableStateOf(loaded.ttsBaseUrl) }
+    var ttsApiKey by remember(loaded.ttsApiKey) { mutableStateOf(loaded.ttsApiKey) }
+    var ttsModel by remember(loaded.ttsModel) { mutableStateOf(loaded.ttsModel) }
+    var ttsVoice by remember(loaded.ttsVoice) { mutableStateOf(loaded.ttsVoice) }
 
     fun write(transform: (AppSettings) -> AppSettings) {
         scope.launch { settingsStore.update(transform) }
@@ -148,8 +161,10 @@ fun SettingsScreen(settingsStore: SettingsStore) {
     }
 
     // Re-read the system state when a settings screen we opened comes back.
+    var engineTick by remember { mutableStateOf(0) }
     val systemSettingsLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            engineTick++
             refreshPermissions()
         }
     val runtimePermissionLauncher =
@@ -281,6 +296,13 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                     )
                 },
             )
+            if (loaded.baseUrl.startsWith("http://", ignoreCase = true) && loaded.apiKey.isNotBlank()) {
+                Text(
+                    text = "This endpoint is plain http, so the API key travels unencrypted on your network. That is expected for a local server on your own Wi-Fi; for anything beyond it, prefer an https endpoint.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             OutlinedTextField(
                 value = model,
                 onValueChange = { value ->
@@ -346,13 +368,230 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             )
         }
 
+        SectionCard(title = "Auto mode") {
+            Text(
+                text = "While Auto mode is on, the agent keeps running in the background and listens to the " +
+                    "phone's notifications. When a person really needs a reply it opens the app the message " +
+                    "arrived in, sends a short answer on your behalf and goes back to listening. It never " +
+                    "answers one-time codes, promotions or machine notices; anything unclear is skipped.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = autoPersona,
+                onValueChange = { value ->
+                    autoPersona = value
+                    write { it.copy(autoModePersona = value) }
+                },
+                label = { Text("What Auto mode may answer") },
+                minLines = 2,
+                maxLines = 6,
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = {
+                    Text(
+                        "Optional persona that limits or specializes it: e.g. \"only messages from my " +
+                            "family, in Arabic\", \"answer work e-mail during office hours\", \"never take part in group chats\"",
+                    )
+                },
+            )
+        }
+
         SectionCard(title = "Voice") {
             SwitchRow(
                 title = "Speak replies out loud",
-                detail = "Reads every assistant reply with the on-device text-to-speech voice.",
+                detail = "Reads every assistant reply with the chosen voice.",
                 checked = loaded.speakReplies,
                 onCheckedChange = { checked -> write { it.copy(speakReplies = checked) } },
             )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TtsMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = loaded.ttsMode == mode,
+                        onClick = { write { it.copy(ttsMode = mode) } },
+                        label = { Text(mode.label) },
+                    )
+                }
+            }
+            // The engines installed on this phone; the choice survives even when Android has no default set.
+            val engines = remember(engineTick) { installedTtsEngines(context) }
+            val engineChoices = engines +
+                (if (loaded.ttsEngine.isNotBlank() && engines.none { it.packageName == loaded.ttsEngine }) {
+                    listOf(TtsEngineEntry(label = loaded.ttsEngine, packageName = loaded.ttsEngine))
+                } else {
+                    emptyList()
+                })
+            if (engineChoices.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = loaded.ttsEngine.isBlank(),
+                        onClick = { write { it.copy(ttsEngine = "") } },
+                        label = { Text("System default") },
+                    )
+                    engineChoices.forEach { choice ->
+                        FilterChip(
+                            selected = loaded.ttsEngine == choice.packageName,
+                            onClick = { write { it.copy(ttsEngine = choice.packageName) } },
+                            label = { Text(choice.label) },
+                        )
+                    }
+                }
+            }
+            // What the phone's own engine can do right now; refreshed when Android's own screens return.
+            val engineStatus = remember(engineTick) { speaker.ttsStatus() }
+            Text(
+                text = when {
+                    !engineStatus.ready && loaded.ttsMode == TtsMode.REMOTE ->
+                        "On-device voice: ${engineStatus.problem ?: "not ready"} (remote is active)."
+                    loaded.ttsMode == TtsMode.REMOTE ->
+                        "On-device voice \"${engineStatus.engineLabel.ifBlank { "on-device" }}\" is ready (remote is active)."
+                    engineStatus.problem != null ->
+                        "On-device voice: ${engineStatus.problem}"
+                    engineStatus.languageAvailable ->
+                        "On-device voice \"${engineStatus.engineLabel.ifBlank { "on-device" }}\" is ready for ${speechLanguageName(loaded.sttLanguage)}."
+                    else ->
+                        "On-device voice \"${engineStatus.engineLabel.ifBlank { "on-device" }}\" is missing data for ${speechLanguageName(loaded.sttLanguage)}."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            var installMessage by remember { mutableStateOf<String?>(null) }
+            OutlinedButton(
+                onClick = {
+                    val intent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA)
+                    // Aim the installer at the chosen engine; unset targets the system default.
+                    if (loaded.ttsEngine.isNotBlank()) intent.setPackage(loaded.ttsEngine)
+                    runCatching { systemSettingsLauncher.launch(intent) }
+                        .onFailure {
+                            installMessage = if (loaded.ttsEngine.isNotBlank()) {
+                                "This engine offers no data-install screen; pick another engine and try again."
+                            } else {
+                                "No default TTS engine is set on this phone; pick one of the engines first."
+                            }
+                        }
+                },
+            ) {
+                Text(text = "Install voice data")
+            }
+            installMessage?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (loaded.ttsMode == TtsMode.REMOTE) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ttsPresets.forEach { preset ->
+                        FilterChip(
+                            selected = ttsBaseUrl == preset.baseUrl && ttsModel == preset.model && ttsVoice == preset.voice,
+                            onClick = {
+                                ttsBaseUrl = preset.baseUrl
+                                ttsModel = preset.model
+                                ttsVoice = preset.voice
+                                write {
+                                    it.copy(ttsBaseUrl = preset.baseUrl, ttsModel = preset.model, ttsVoice = preset.voice)
+                                }
+                            },
+                            label = { Text(preset.label) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = ttsBaseUrl,
+                    onValueChange = { value ->
+                        ttsBaseUrl = value
+                        write { it.copy(ttsBaseUrl = value) }
+                    },
+                    label = { Text("Base URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    supportingText = {
+                        Text("Root of the OpenAI-compatible endpoint; replies are posted to /audio/speech")
+                    },
+                )
+                OutlinedTextField(
+                    value = ttsApiKey,
+                    onValueChange = { value ->
+                        ttsApiKey = value
+                        write { it.copy(ttsApiKey = value) }
+                    },
+                    label = { Text("API key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                    supportingText = { Text("Optional for a local server") },
+                )
+                OutlinedTextField(
+                    value = ttsModel,
+                    onValueChange = { value ->
+                        ttsModel = value
+                        write { it.copy(ttsModel = value) }
+                    },
+                    label = { Text("Speech model") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = ttsVoice,
+                    onValueChange = { value ->
+                        ttsVoice = value
+                        write { it.copy(ttsVoice = value) }
+                    },
+                    label = { Text("Voice") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    supportingText = { Text("Name of the voice, e.g. alloy, nova or Arista-PlayAI") },
+                )
+            } else {
+                Text(
+                    text = "Replies use the phone's own voice; it speaks the language set under Speech to text.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            var testingVoice by remember { mutableStateOf(false) }
+            var testResult by remember { mutableStateOf<String?>(null) }
+            OutlinedButton(
+                enabled = !testingVoice,
+                onClick = {
+                    testingVoice = true
+                    testResult = null
+                    scope.launch {
+                        val outcome = HumanPhoneApp.instance.speaker.probe("Testing the HumanPhone voice.")
+                        testResult = outcome.exceptionOrNull()?.message ?: "Playing…"
+                        testingVoice = false
+                    }
+                },
+            ) {
+                if (testingVoice) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(text = "Test voice")
+            }
+            testResult?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         SectionCard(title = "Speech to text") {
@@ -425,29 +664,96 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
-                    value = sttLanguage,
-                    onValueChange = { value ->
-                        sttLanguage = value
-                        write { it.copy(sttLanguage = value) }
-                    },
-                    label = { Text("Language") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    supportingText = {
-                        Text("Optional language code such as en or ar; empty lets the server detect it")
-                    },
-                )
             } else {
+                val sttStatusNow = remember(engineTick) { voice.sttStatus() }
                 Text(
-                    text = "Dictation uses the phone's own recogniser, so it needs no endpoint or key.",
+                    text = when {
+                        sttStatusNow.recognitionAvailable ->
+                            "Dictation uses the phone's own recogniser, which is available."
+                        else ->
+                            "The phone has no speech recogniser; use \"Remote Whisper API\" with an endpoint, or install one."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = {
+                        systemSettingsLauncher.launch(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+                    },
+                ) {
+                    Text(text = "Voice input settings")
+                }
+            }
+            OutlinedTextField(
+                value = sttLanguage,
+                onValueChange = { value ->
+                    sttLanguage = value
+                    write { it.copy(sttLanguage = value) }
+                },
+                label = { Text("Language") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = {
+                    Text(
+                        "Optional language code such as en or ar; the recogniser listens in it and it steers the on-device voice. Empty follows the system language.",
+                    )
+                },
+            )
+            // Runs the same dictation path the app uses everywhere, straight from Settings.
+            val listening = voice.isListening.collectAsState().value
+            val partialNow = voice.partial.collectAsState().value
+            val statusNow = voice.status.collectAsState().value
+            var heardNow by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(Unit) {
+                voice.heard.collect { utterance ->
+                    if (utterance.isNotBlank()) heardNow = utterance
+                }
+            }
+            OutlinedButton(
+                onClick = {
+                    if (listening) {
+                        voice.stopListening()
+                    } else {
+                        heardNow = null
+                        voice.startListening()
+                    }
+                },
+            ) {
+                if (listening) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(text = if (listening) "Stop listening" else "Test listening")
+            }
+            val liveHint = when {
+                statusNow.isNotBlank() -> statusNow
+                listening && !partialNow.isBlank() -> partialNow
+                listening -> stringResource(R.string.status_listening)
+                else -> ""
+            }
+            if (liveHint.isNotBlank()) {
+                Text(
+                    text = liveHint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            heardNow?.let { heard ->
+                Text(
+                    text = "Heard: \"$heard\"",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary,
                 )
             }
         }
 
         SectionCard(title = "Agent") {
+            SwitchRow(
+                title = "Send texts directly",
+                detail = "Off, a send stops in the messaging app with the message pre-filled and you press send — safe and permission-free. On (and with the SMS permission granted), the assistant sends without stopping.",
+                checked = loaded.directSms,
+                onCheckedChange = { checked -> write { it.copy(directSms = checked) } },
+            )
             SwitchRow(
                 title = "Attach screenshots",
                 detail = "Sends a picture of the screen with every agent step so the model can see it.",
@@ -684,8 +990,25 @@ private val sttPresets = listOf(
 
 private data class SttPreset(val label: String, val baseUrl: String, val model: String)
 
+/** One-tap endpoint, model and voice for the speech providers people actually use. */
+private val ttsPresets = listOf(
+    TtsPreset(label = "OpenAI", baseUrl = "https://api.openai.com/v1", model = "gpt-4o-mini-tts", voice = "alloy"),
+    TtsPreset(label = "Groq", baseUrl = "https://api.groq.com/openai/v1", model = "playai-tts", voice = "Arista-PlayAI"),
+    TtsPreset(label = "Local server", baseUrl = "http://127.0.0.1:8080/v1", model = "tts-1", voice = "alloy"),
+)
+
+private data class TtsPreset(val label: String, val baseUrl: String, val model: String, val voice: String)
+
 private fun hasPermission(context: Context, permission: String): Boolean =
     ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+/** The speech language as people say it ("the system language" when none is configured). */
+private fun speechLanguageName(tag: String): String {
+    val trimmed = tag.trim()
+    if (trimmed.isEmpty()) return "the system language"
+    val locale = Locale.forLanguageTag(trimmed)
+    return locale.displayLanguage.ifBlank { trimmed }
+}
 
 private fun areNotificationsAllowed(context: Context): Boolean =
     Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||

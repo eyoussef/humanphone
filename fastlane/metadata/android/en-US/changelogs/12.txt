@@ -1,0 +1,10 @@
+Speech engines you can install and run from the app.
+
+* Settings → Speech to text: shows whether the phone's own recogniser is available, opens the
+  voice input settings page to install or switch one, and a “Test listening” button runs the
+  same dictation path the app uses everywhere, showing what it heard.
+* Settings → Voice: shows the on-device engine state and whether voice data exists for the
+  configured speech language, opens the engine's “install voice data” screen, and the test
+  button now reports exactly what is missing.
+* The Language field now applies in both recognition modes: it steers the phone's recogniser,
+  hints the transcription endpoint and picks the on-device voice.

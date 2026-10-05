@@ -1,0 +1,13 @@
+Auto mode fix:
+
+* Notifications are heard again: a screen-watching update had silenced the notification
+  stream, so Auto mode could not answer anything. It watches them once more.
+* Messages that arrive while the agent is busy are queued and answered when the task ends,
+  instead of being dropped.
+
+Auto mode stays on watch:
+
+* Turning Auto mode on starts the background monitor itself — no task or command needed.
+* Closing the app no longer takes the monitor with it: the agent service keeps running and
+  listening in the background, also after the last task was finalised.
+* If the monitor went down, the next notification quietly brings it back.

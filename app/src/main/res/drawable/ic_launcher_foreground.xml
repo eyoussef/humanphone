@@ -1,21 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#4C8DFF"
-        android:pathData="M54,30m-13,0a13,13 0,1 1,26 0a13,13 0,1 1,-26 0" />
-    <path
-        android:fillColor="#4C8DFF"
-        android:pathData="M32,76c0,-13 10,-21 22,-21c12,0 22,8 22,21z" />
-    <path
-        android:fillColor="#8BE9C0"
-        android:pathData="M40,62h28v30h-28z" />
-    <path
-        android:fillColor="#0B0E14"
-        android:pathData="M45,68h18v14h-18z" />
-    <path
-        android:fillColor="#8BE9C0"
-        android:pathData="M49,86h10v2h-10z" />
+    <!-- The safe center of an adaptive icon: everything outside the 66dp circle is cropped. -->
+    <group>
+        <!-- Phone body: rounded vertical slab, tilted 8 degrees for a hand-held feel -->
+        <group
+            android:scaleX="0.92"
+            android:scaleY="0.92"
+            android:pivotX="54"
+            android:pivotY="54"
+            android:rotation="8">
+            <path
+                android:fillColor="#1C2333"
+                android:pathData="M43.5,26h21a4,4 0,0 1,4 4v44a4,4 0,0 1,-4 4h-21a4,4 0,0 1,-4 -4v-44a4,4 0,0 1,4 -4z" />
+            <path
+                android:strokeColor="#3D4C6E"
+                android:strokeWidth="1.4"
+                android:fillColor="#00000000"
+                android:pathData="M43.5,26h21a4,4 0,0 1,4 4v44a4,4 0,0 1,-4 4h-21a4,4 0,0 1,-4 -4v-44a4,4 0,0 1,4 -4z" />
+            <!-- Speaker slit -->
+            <path
+                android:fillColor="#3D4C6E"
+                android:pathData="M50.5,30.5h7a1,1 0,0 1,0 2h-7a1,1 0,0 1,0 -2z" />
+            <path
+                android:fillColor="#00000000"
+                android:strokeColor="#4C8DFF"
+                android:strokeWidth="1.6"
+                android:strokeLineCap="round"
+                android:pathData="M47.5,40.5c3,-3.4 10,-3.4 13,0M49.5,44c1.8,-2 7.2,-2 9,0M51.5,47.5c0.7,-0.8 4.3,-0.8 5,0" />
+            <!-- Screen: the agent working inside -->
+            <path
+                android:fillColor="#0B0E14"
+                android:pathData="M42.5,52.5h23v16h-23z" />
+            <path
+                android:fillColor="#4C8DFF"
+                android:pathData="M47,55.5m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
+            <path
+                android:strokeColor="#8BE9C0"
+                android:strokeWidth="1.4"
+                android:strokeLineCap="round"
+                android:fillColor="#00000000"
+                android:pathData="M51,55.5h11" />
+            <path
+                android:strokeColor="#4C8DFF"
+                android:strokeWidth="1.4"
+                android:strokeLineCap="round"
+                android:fillColor="#00000000"
+                android:pathData="M50,62.5c1.6,-1.6 4,-1.6 5.6,0M52.8,65.5c1,-0.9 2.6,-0.9 3.6,0" />
+            <path
+                android:strokeColor="#4C8DFF"
+                android:strokeWidth="1.4"
+                android:strokeLineCap="round"
+                android:fillColor="#00000000"
+                android:pathData="M60,60l3,2.5l-3,2.5" />
+            <!-- Home bar of the phone -->
+            <path
+                android:fillColor="#3D4C6E"
+                android:pathData="M50,69.5h8a0.9,0.9 0,0 1,0 1.8h-8a0.9,0.9 0,0 1,0 -1.8z" />
+        </group>
+        <!-- Thumb: the phone is being held and used -->
+        <path
+            android:fillColor="#EFE7DC"
+            android:pathData="M67.5,60m-6.5,0a6.5,6.5 0,1 1,13 0a6.5,6.5 0,1 1,-13 0" />
+        <path
+            android:fillColor="#EFE7DC"
+            android:pathData="M61.5,58m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+        <!-- Fingernail highlight keeps the thumb readable on every background -->
+        <path
+            android:fillColor="#FFD9A0"
+            android:pathData="M67.5,60m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+    </group>
 </vector>

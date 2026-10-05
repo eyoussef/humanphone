@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Launcher background: deep space blue-black, matching Theme.HumanAgent. -->
     <color name="ic_launcher_background">#0B0E14</color>
+    <!-- Layered glow behind the phone for the adaptive icon monochrome/gradient feel. -->
+    <color name="ic_launcher_glow">#101A2E</color>
 </resources>
