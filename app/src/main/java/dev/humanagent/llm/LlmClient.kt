@@ -52,7 +52,7 @@ class LlmClient(
             builder.header("Authorization", "Bearer ${config.apiKey}")
         }
         if (config.kind == ProviderKind.OPENROUTER) {
-            builder.header("HTTP-Referer", "https://github.com/humanphone")
+            builder.header("HTTP-Referer", "https://gitlab.com/eyoussef1/humanphone")
             builder.header("X-Title", "HumanPhone")
         }
 

@@ -10,13 +10,19 @@ also install the on-device voice data, see whether the phone's recogniser is ava
 voice input settings to install or switch one, and test both speech features without leaving the app.
 * Operator: enable the HumanPhone accessibility service and hand a typed task to an agent loop that reads the visible screen and performs real taps, text entry, scrolling and app navigation until the task is done. Every step is shown live, and a run can be cancelled at any time. Auto mode goes further: new notifications are watched and answered on your behalf when a person actually needs a reply, while promotions, newsletters and one-time codes are skipped.
 
-There is no HumanPhone account, no vendor backend and no telemetry. The app only talks to the model endpoints you configure: a local Ollama server, OpenRouter, or any OpenAI-compatible base URL with /chat/completions. An optional OpenAI-compatible /audio/transcriptions endpoint (for example Whisper) turns dictation into text; without it the phone's own speech recogniser is used.
+There is no HumanPhone account, no vendor backend and no telemetry. The app talks to the model endpoints you configure: a local Ollama server, OpenRouter, or any OpenAI-compatible base URL with /chat/completions. An optional OpenAI-compatible /audio/transcriptions endpoint (for example Whisper) turns dictation into text; without it the phone's own speech recogniser is used.
+
+What leaves your device, plainly:
+
+* Every operator step sends the full text of the current screen to the model endpoint — always, with no setting. Your screenshot image is attached only if you turn on screenshot sending.
+* Auto mode sends each new notification's app name, title and text (including one-time codes) to the model endpoint so it can decide whether a reply is needed. One-time codes are never used in a reply; their text is still sent for the decision.
+* Whatever endpoint you configure receives this: a local Ollama stays on your network, but a cloud service (OpenRouter, OpenAI, Groq, ...) is a third party that sees your screen text and notifications.
+* The agent can also fetch images from a URL the model chooses (capped at 10 MB), and a built-in site-preview tool serves the website the model is building on a loopback address on your phone only.
+* Conversations, memories and the run history are stored locally on the device.
 
 The operator has tools for reading the screen, tapping a node or text, typing and clearing text, scrolling, back/home/recents/notifications, launching apps, opening URLs, placing calls, composing texts, looking up contacts, creating alarms, opening system settings pages, waiting for text to appear, remembering small facts between runs, speaking out loud and finishing with a summary.
 
 The interface ships in English, العربية, Français, Español, Português and हिन्दी (per-app language, Android 13 or newer).
-
-Nothing leaves the device except the requests to those endpoints: screen contents are only sent when you turn on screenshot sending, and conversations are stored locally.
 
 Requires Android 11 or newer. For the operator, Android also needs the HumanPhone accessibility service enabled (Settings, Apps, HumanPhone, Restricted settings).
 
