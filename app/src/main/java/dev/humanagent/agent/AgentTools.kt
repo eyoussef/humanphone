@@ -251,6 +251,20 @@ class AgentTools(
         )
         add(
             ToolSpec(
+                name = "forget",
+                description = "Delete one remembered fact by its exact key, for example when the user corrects it. Use clear_memory to wipe all facts at once.",
+                parameters = schema(listOf("key"), "key" to stringProp("exact key of the fact to delete")),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "clear_memory",
+                description = "Delete every remembered fact about the user. Only when the user asks for it.",
+                parameters = schema(),
+            )
+        )
+        add(
+            ToolSpec(
                 name = "app_skill",
                 description = "Read the built-in operating notes and any learned steps for an app. Omit app to get the notes for the app currently on screen.",
                 parameters = schema(
@@ -476,6 +490,20 @@ class AgentTools(
                     ToolOutcome("Noted what you know about $name.", includeScreen = false)
                 }
                 "recall" -> ToolOutcome(memory.render(), includeScreen = false)
+                "forget" -> {
+                    val removed = memory.removeFact(requireString(args, "key"))
+                    ToolOutcome(
+                        if (removed) "Forgot it." else "No fact with that key. Call recall to see the exact keys.",
+                        includeScreen = false,
+                    )
+                }
+                "clear_memory" -> {
+                    val count = memory.clearFacts()
+                    ToolOutcome(
+                        "Cleared $count fact${if (count == 1) "" else "s"}. People and past tasks are kept.",
+                        includeScreen = false,
+                    )
+                }
                 "speak" -> {
                     val text = requireString(args, "text")
                     if (settings.speakReplies) speaker.say(text)

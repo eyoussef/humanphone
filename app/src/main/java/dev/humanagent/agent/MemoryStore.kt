@@ -101,6 +101,46 @@ class MemoryStore(private val file: File) {
 
     fun snapshot(): Map<String, String> = document.facts.associate { it.key to it.value }
 
+    /** Deletes one fact by its exact key; returns true when it existed. */
+    suspend fun removeFact(key: String): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val wanted = key.trim().take(80)
+            if (wanted.isEmpty() || document.facts.none { it.key == wanted }) {
+                false
+            } else {
+                document = document.copy(facts = document.facts.filterNot { it.key == wanted })
+                persistLocked()
+                true
+            }
+        }
+    }
+
+    /** Deletes every fact; returns how many were cleared. People and episodes are kept. */
+    suspend fun clearFacts(): Int = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val count = document.facts.size
+            if (count > 0) {
+                document = document.copy(facts = emptyList())
+                persistLocked()
+            }
+            count
+        }
+    }
+
+    /** Deletes one person by name (case-insensitive); returns true when they existed. */
+    suspend fun forgetPerson(name: String): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val wanted = name.trim().take(80)
+            if (wanted.isEmpty() || document.people.none { it.name.equals(wanted, ignoreCase = true) }) {
+                false
+            } else {
+                document = document.copy(people = document.people.filterNot { it.name.equals(wanted, ignoreCase = true) })
+                persistLocked()
+                true
+            }
+        }
+    }
+
     /** Adds to what is known about a person, creating them on first mention. */
     suspend fun rememberPerson(name: String, relation: String, channel: String, note: String) =
         withContext(Dispatchers.IO) {

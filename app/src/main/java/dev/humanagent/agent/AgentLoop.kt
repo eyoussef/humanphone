@@ -130,10 +130,22 @@ class AgentLoop(
         var answered = false
         var nudges = 0
         var usedTools = false
+        val loopWatch = LoopWatch()
         while (stepIndex < settings.maxSteps && currentCoroutineContext().isActive) {
             stepIndex++
             conversation[0] = Message.system(buildSystemPrompt(settings))
             val snapshot = reader.snapshot()
+            val screenWarning = loopWatch.noteScreen(snapshot.rendered)
+            if (loopWatch.stalledTooLong()) {
+                val note = "I have been looking at the same screen for the last ${LoopWatch.STALL_STOP_STREAK} steps " +
+                    "and nothing works. Stopping here rather than repeating myself: " +
+                    (snapshot.rendered.lineSequence().firstOrNull()?.take(300) ?: "no progress possible.")
+                step("reply", "Stopped", note)
+                _state.update { it.copy(lastReply = note) }
+                if (settings.speakReplies) say(note)
+                answered = true
+                break
+            }
             val screenshot = if (settings.sendScreenshots) {
                 runCatching { service.captureScreenshotBase64() }.getOrNull()
             } else {
@@ -141,7 +153,8 @@ class AgentLoop(
             }
             conversation += Message(
                 role = "user",
-                content = "Step $stepIndex. Current screen:\n${snapshot.rendered}${skillNotes(snapshot)}",
+                content = "Step $stepIndex. Current screen:\n${snapshot.rendered}${skillNotes(snapshot)}" +
+                    (screenWarning?.let { "\n\n$it" } ?: ""),
                 images = listOfNotNull(screenshot),
             )
 
@@ -160,9 +173,10 @@ class AgentLoop(
                     nudges++
                     step("nudge", "Continue", reply)
                     conversation += Message.user(
-                        "Keep working. Use the tools step by step until the whole task is done, and call finish with a short summary. Do not stop halfway with words alone.",
+                        "If the task is actually done, call finish now with a short summary of what you changed. " +
+                            "If it is not done, keep using the tools until it is — do not stop with words alone.",
                     )
-                    ConversationTrimmer.trim(conversation)
+                    ConversationTrim.trim(conversation)
                     continue
                 }
                 step("reply", "Assistant", reply)
@@ -177,9 +191,20 @@ class AgentLoop(
                 usedTools = true
                 if (!currentCoroutineContext().isActive) return
                 step("action", call.name, call.arguments)
-                val outcome = tools.execute(call, executor, service, settings)
+
+                // Repeating an exact call is how small models burn steps; steer instead of burning.
+                val repeatNote = loopWatch.gate(call.name, call.arguments)
+                val before = reader.snapshot().rendered
+                val outcome = if (repeatNote == null) {
+                    loopWatch.recordRun(call.name, call.arguments)
+                    tools.execute(call, executor, service, settings)
+                } else {
+                    ToolOutcome(repeatNote)
+                }
+                val after = reader.snapshot().rendered
+                if (before == after) loopWatch.recordNoop(call.name, call.arguments)
                 val payload = if (outcome.includeScreen) {
-                    outcome.text + "\n\n" + reader.snapshot().rendered
+                    outcome.text + "\n\n" + after
                 } else {
                     outcome.text
                 }
@@ -194,7 +219,7 @@ class AgentLoop(
                 }
             }
 
-            ConversationTrimmer.trim(conversation)
+            ConversationTrim.trim(conversation)
             if (terminal) break
             delay(settings.stepDelayMs.coerceAtLeast(0).toLong())
         }
@@ -323,6 +348,9 @@ class AgentLoop(
         append("- press_enter submits the focused field, which is how prompts, chat messages and searches are sent.\n")
         append("- Once a multi-step flow works, store it with save_skill so the same app is easier next time.\n")
         append("- The \"App skill\" notes above the screen dump are that app's own manual: follow them and prefer them over guessing.\n")
+        append("- Before any action, check what you already did this task. Never repeat an action that already succeeded — go on to the next one.\n")
+        append("- If a screen stays the same after your action, that action did nothing here. Do something different.\n")
+        append("- When the goal is reached, call finish immediately; do not re-do or double-check what already worked.\n")
         append("- Use find_contact before call or send_sms when you only know a name.\n")
         append("- confirm_delivered ends an owed result: send the message into the conversation first, then call it with the exact text you typed. It is verified against the screen.\n")
         append("- Use speak when the user should hear progress, and finish the moment the goal is met, blocked, or needs the user.\n")

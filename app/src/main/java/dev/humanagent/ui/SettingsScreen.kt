@@ -32,6 +32,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -59,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -117,6 +119,7 @@ fun SettingsScreen(settingsStore: SettingsStore) {
     var ttsApiKey by remember(loaded.ttsApiKey) { mutableStateOf(loaded.ttsApiKey) }
     var ttsModel by remember(loaded.ttsModel) { mutableStateOf(loaded.ttsModel) }
     var ttsVoice by remember(loaded.ttsVoice) { mutableStateOf(loaded.ttsVoice) }
+    var showClearMemoryDialog by remember { mutableStateOf(false) }
 
     fun write(transform: (AppSettings) -> AppSettings) {
         scope.launch { settingsStore.update(transform) }
@@ -778,6 +781,109 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                 onValueChange = { stepDelay = (it / 100f).roundToInt().coerceIn(0, 20).toFloat() * 100f },
                 onValueChangeFinished = { write { it.copy(stepDelayMs = stepDelay.roundToInt()) } },
             )
+        }
+
+        SectionCard(title = stringResource(R.string.memory_title)) {
+            val memory = HumanPhoneApp.instance.memory
+            val notes = memory.snapshot()
+            val people = memory.people()
+            if (notes.isEmpty() && people.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.memory_empty),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                if (notes.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.memory_facts),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                    )
+                    notes.forEach { (key, value) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = key,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = value,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(onClick = { scope.launch { memory.removeFact(key) } }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = stringResource(R.string.memory_delete_note),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (people.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.memory_people),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                    )
+                    people.forEach { person ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = person.name + (person.relation.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = (person.channels + person.notes).joinToString(" · "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(
+                                onClick = { scope.launch { memory.forgetPerson(person.name) } },
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = stringResource(R.string.memory_delete_person),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+                OutlinedButton(onClick = { showClearMemoryDialog = true }) {
+                    Text(stringResource(R.string.memory_clear_all))
+                }
+            }
+            if (showClearMemoryDialog) {
+                AlertDialog(
+                    onDismissRequest = { showClearMemoryDialog = false },
+                    title = { Text(stringResource(R.string.memory_clear_all)) },
+                    text = { Text(stringResource(R.string.memory_clear_confirm)) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showClearMemoryDialog = false
+                            scope.launch { memory.clearFacts() }
+                        }) { Text(stringResource(R.string.memory_clear_all)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showClearMemoryDialog = false }) { Text(stringResource(R.string.done)) }
+                    },
+                )
+            }
         }
 
         SectionCard(title = "Permissions") {
