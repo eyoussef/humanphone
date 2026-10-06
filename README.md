@@ -55,7 +55,7 @@ The agent loop exposes the following tools to the model:
 | `call`, `send_sms`, `find_contact` | Open the dialler, send (or pre-fill) a text message, look up a contact |
 | `set_alarm`, `system_settings` | Create an alarm, open a system settings page |
 | `wait`, `wait_for_text` | Sleep, or poll until some text appears on screen |
-| `remember`, `recall` | Persist and read back facts, people and recent tasks between runs |
+| `remember`, `recall`, `forget`, `clear_memory` | Persist, read back, delete one fact, or wipe all facts between runs |
 | `remember_person` | Remember who someone is to the user: relation, where they talk, how to treat them |
 | `app_skill`, `save_skill` | Read an app's built-in operating notes, or store the steps that worked |
 | `record_offer`, `compare_offers` | Record shopping candidates with their prices, then rank them cheapest first |
@@ -77,6 +77,14 @@ The assistant keeps one durable record in its private storage — the twin. Fact
 and one compact episode per task it ran. Every agent step and every chat reply reads that
 record, and Auto mode reads the people, so "Sam" is known as the brother who prefers Arabic and
 not just a notification title.
+
+The agent cannot get stuck going in circles: repeating the exact same action is blocked with
+guidance back to the model, actions that provably leave the screen unchanged are stopped, and a
+run that stalls on one screen ends honestly instead of burning steps. History is trimmed with
+the older actions kept as a condensed journal, and a stuck run still returns the phone to
+HumanPhone. Facts (`forget`, `clear_memory`) and people can be deleted by the agent during a
+task, and the whole memory is visible under *Settings → Assistant memory*, where you can delete
+notes one by one or clear all facts.
 
 A task that promises a result to a conversation also opens an obligation in the ledger. It
 survives context trimming, the run ending and the process dying: the system prompt shows it at

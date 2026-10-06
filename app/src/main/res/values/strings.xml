@@ -62,4 +62,13 @@
     <string name="notification_halt">Halt</string>
     <string name="notification_ready">Ready when you are.</string>
     <string name="notification_working">Working…</string>
+
+    <string name="memory_title">Assistant memory</string>
+    <string name="memory_empty">Nothing remembered yet. Facts and people the assistant learns appear here and can be deleted one by one.</string>
+    <string name="memory_facts">Facts</string>
+    <string name="memory_people">People</string>
+    <string name="memory_delete_note">Delete this fact</string>
+    <string name="memory_delete_person">Forget this person</string>
+    <string name="memory_clear_all">Clear all facts</string>
+    <string name="memory_clear_confirm">Delete every fact the assistant remembers? People and past tasks are kept. This cannot be undone.</string>
 </resources>

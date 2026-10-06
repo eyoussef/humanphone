@@ -68,6 +68,37 @@ class MemoryStoreTest {
     }
 
     @Test
+    fun deletionsRemoveExactlyWhatTheyNameAndPersist() = runTest {
+        val file = fresh()
+        val store = MemoryStore(file)
+        store.load()
+        store.put("mum's number", "+1 555 0100")
+        store.put("gym", "FitFlow")
+        store.rememberPerson("Sam", "brother", "WhatsApp", "prefers Arabic")
+        store.rememberPerson("Ana", "colleague", "Telegram", "")
+
+        assertTrue(store.removeFact("mum's number"))
+        assertFalse(store.removeFact("mum's number"))
+        assertFalse(store.removeFact("unknown"))
+        assertTrue(store.forgetPerson("sam")) // case-insensitive
+        assertFalse(store.forgetPerson("sam"))
+        assertEquals(1, store.people().size)
+
+        val loaded = MemoryStore(file)
+        loaded.load()
+        assertEquals(setOf("gym"), loaded.snapshot().keys)
+        assertEquals("Ana", loaded.people().first().name)
+
+        assertEquals(1, loaded.clearFacts())
+        assertEquals(0, loaded.clearFacts())
+        val afterClear = MemoryStore(file)
+        afterClear.load()
+        assertTrue(afterClear.snapshot().isEmpty())
+        assertEquals(1, afterClear.people().size) // people survive a fact wipe
+        file.delete()
+    }
+
+    @Test
     fun episodesKeepTheNewestFirstForThePromptAndMarkOwedOnes() = runTest {
         val file = fresh()
         val store = MemoryStore(file)

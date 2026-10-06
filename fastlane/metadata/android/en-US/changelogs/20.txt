@@ -1,0 +1,5 @@
+Loop protection and memory you can see and clear.
+
+* Repeating the exact same action is blocked with guidance back to the model; actions that change nothing on screen are stopped. A stuck run ends honestly.
+* Older actions stay as a condensed journal, so long tasks never re-do work; the nudge no longer forces redoing a completed task.
+* Settings shows every remembered fact and person: delete one by one or clear all. The agent can too, with forget and clear_memory.
