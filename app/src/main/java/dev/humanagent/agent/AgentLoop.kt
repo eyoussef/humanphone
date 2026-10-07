@@ -117,7 +117,9 @@ class AgentLoop(
         }
 
         val reader = ScreenReader(service)
-        val executor = UiActionExecutor(service, reader, settings.directSms)
+        val launches = AppLaunchCache(context)
+        runCatching { launches.load() }
+        val executor = UiActionExecutor(service, reader, settings.directSms, launches)
         val tools = AgentTools(context, memory, ledger, speaker, skills, activeObligation)
         val client = LlmClient(config)
         val conversation = mutableListOf<Message>()

@@ -86,6 +86,11 @@ HumanPhone. Facts (`forget`, `clear_memory`) and people can be deleted by the ag
 task, and the whole memory is visible under *Settings → Assistant memory*, where you can delete
 notes one by one or clear all facts.
 
+App opening learns from experience: the first time an app is opened, its name-to-package mapping
+is remembered (every spelling the model used), and the next task opens that app straight away
+without re-scanning the phone's launchers. The memory is bounded, and an uninstalled app is
+re-learned automatically on the next open.
+
 A task that promises a result to a conversation also opens an obligation in the ledger. It
 survives context trimming, the run ending and the process dying: the system prompt shows it at
 every step, `finish` is refused while it is open, a run that ends anyway counts a failed
