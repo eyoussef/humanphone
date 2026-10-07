@@ -26,7 +26,9 @@ object ConversationTrim {
                 var start = i
                 while (start > 0 && conversation[start].role == "tool") start--
                 if (conversation[start].role == "assistant") {
-                    groups.add(conversation.subList(start, i + 1)) // assistant + its tool replies
+                    // Copies, not views: trim() clears the conversation below, and touching a stale
+                    // subList view after that throws ConcurrentModificationException mid-run.
+                    groups.add(conversation.subList(start, i + 1).toList())
                     i = start - 1
                 } else {
                     groups.add(listOf(message)) // stray tool reply (defensive)
@@ -51,14 +53,15 @@ object ConversationTrim {
 
         if (firstDropped >= groups.size) return ""
 
-        val dropped = groups.subList(firstDropped, groups.size).flatten()
+        // Groups run newest-first (built from the end); both halves must be re-assembled
+        // oldest-first so the model reads its own history forward.
+        val dropped = groups.subList(firstDropped, groups.size).reversed().flatten()
         val journal = journal(dropped)
-        val before = conversation.size
         conversation.clear()
         conversation.add(system)
         if (journal.isNotEmpty()) conversation.add(Message.user(journal))
-        conversation.addAll(groups.subList(0, firstDropped).flatten())
-        return if (journal.isNotEmpty()) journal else ""
+        conversation.addAll(groups.subList(0, firstDropped).reversed().flatten())
+        return journal
     }
 
     /** One line per assistant action with its tool results, compact enough to keep every run. */

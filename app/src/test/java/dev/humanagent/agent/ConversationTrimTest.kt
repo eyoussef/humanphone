@@ -87,6 +87,35 @@ class ConversationTrimTest {
     }
 
     @Test
+    fun trimDoesNotThrowWhenToolPairsSitInTheKeptTail() {
+        val conversation = mutableListOf(LlmMessage.system("sys"))
+        // 14 assistant+tool pairs plus one screen message: 29 messages, so trimming drops the
+        // oldest pairs while tool pairs remain in the kept tail — the shape that used to throw
+        // ConcurrentModificationException from stale subList views.
+        repeat(14) { n ->
+            conversation.add(assistantWithToolCall("c$n"))
+            conversation.add(LlmMessage.tool("c$n", "tap", "done $n"))
+        }
+        conversation.add(LlmMessage.user("Step 15. Current screen:\nScreen: Chat"))
+
+        val journal = ConversationTrim.trim(conversation)
+
+        assertEquals("sys", conversation.first().content)
+        assertTrue(journal.contains("tap"))
+        // Every surviving tool reply still sits directly behind its own assistant call.
+        for (i in 1 until conversation.size - 1) {
+            val current = conversation[i]
+            if (current.role == "tool") {
+                val previous = conversation[i - 1]
+                assertEquals("tool reply orphaned from its assistant call", "assistant", previous.role)
+                assertTrue(previous.toolCalls.any { it.id == current.toolCallId })
+            }
+        }
+        // The newest screen message is still the tail.
+        assertTrue(conversation.last().content.startsWith("Step 15."))
+    }
+
+    @Test
     fun finishSummariesAreNotDuplicatedIntoJournal() {
         val dropped = listOf(
             assistantWithToolCall("c9", "finish"),

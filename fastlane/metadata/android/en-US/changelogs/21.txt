@@ -1,0 +1,5 @@
+Fixes the ConcurrentModificationException that stopped the agent mid-task.
+
+History trimming held live list views across a rebuild, which crashed any
+long run the moment a tool pair stayed in the kept tail. Trimming now
+copies first, so long tasks run to the end again.
