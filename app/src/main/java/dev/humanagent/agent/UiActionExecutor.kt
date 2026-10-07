@@ -33,6 +33,8 @@ class UiActionExecutor(
      * composer path is the safe default and needs no SMS permission at all.
      */
     private val directSms: Boolean = false,
+    /** Learned name → package memory, so re-opening an app skips the launcher scan. */
+    private val launches: AppLaunchCache,
 ) {
 
     private val appsCache = AtomicReference<List<AppEntry>?>(null)
@@ -269,10 +271,25 @@ class UiActionExecutor(
         return apps.joinToString(", ") { "${it.label} (${it.packageName})" }.take(4000)
     }
 
-    fun openApp(query: String): String {
-        val apps = launchableApps()
+    suspend fun openApp(query: String): String {
         val needle = query.trim().lowercase()
         if (needle.isEmpty()) return "Empty app name."
+
+        // Experience first: this name opened that package before, so launch it directly without
+        // scanning every launcher on the phone.
+        launches.lookup(query)?.let { known ->
+            val intent = runCatching { service.packageManager.getLaunchIntentForPackage(known) }.getOrNull()
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (start(intent)) {
+                    launches.remember(query, known) // refresh: the used name stays in memory
+                    return "Opened $query right away — I remember where it lives ($known)."
+                }
+            }
+            // The remembered app is gone (uninstalled or renamed): fall through and re-learn.
+        }
+
+        val apps = launchableApps()
         val exact = apps.firstOrNull { it.label.lowercase() == needle || it.packageName.lowercase() == needle }
         val matches = apps.filter { it.label.lowercase().contains(needle) || it.packageName.lowercase().contains(needle) }
         val chosen = exact ?: matches.firstOrNull()
@@ -281,7 +298,14 @@ class UiActionExecutor(
         val intent = runCatching { service.packageManager.getLaunchIntentForPackage(chosen.packageName) }.getOrNull()
             ?: return "${chosen.label} has no launchable activity."
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        return if (start(intent)) "Opened ${chosen.label}." else "Could not open ${chosen.label}."
+        return if (start(intent)) {
+            // Learn every name that reaches this app, so the next task opens it instantly.
+            launches.remember(query, chosen.packageName)
+            launches.remember(chosen.label, chosen.packageName)
+            "Opened ${chosen.label}."
+        } else {
+            "Could not open ${chosen.label}."
+        }
     }
 
     fun openUrl(url: String): String {

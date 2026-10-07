@@ -1,0 +1,5 @@
+The agent learns where your apps live, so daily tasks run faster.
+
+* First time an app opens, the assistant remembers the name-to-package mapping. Next time it opens that app directly, without scanning every launcher or listing candidates.
+* Every spelling the model uses is remembered, and re-use keeps it in memory (bounded, oldest one-offs drop). Uninstalled apps are re-learned automatically.
+* Fewer probe steps: less waiting and fewer tokens per daily task.
