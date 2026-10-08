@@ -767,8 +767,8 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                 label = "Max steps per task",
                 valueText = "${maxSteps.roundToInt()}",
                 value = maxSteps,
-                valueRange = 1f..50f,
-                steps = 48,
+                valueRange = 1f..1000f,
+                steps = 998,
                 onValueChange = { maxSteps = it.roundToInt().toFloat() },
                 onValueChangeFinished = { write { it.copy(maxSteps = maxSteps.roundToInt()) } },
             )
