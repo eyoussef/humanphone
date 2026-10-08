@@ -28,6 +28,7 @@ data class BrainState(
     val indexedChunks: Int = 0,
     val totalChunks: Int = 0,
     val chunks: Int = 0,
+    val sources: List<SourceRecord> = emptyList(),
 )
 
 /**
@@ -45,10 +46,11 @@ class Brain(private val context: Context) {
     private val mutex = Mutex()
 
     private val brainDir = File(context.filesDir, "brain")
-    private val modelFile = File(brainDir, "embeddinggemma-2-text-270m.litertlm")
+    private val modelFile = File(brainDir, "embeddinggemma-2-text-vision-440m.litertlm")
     private val indexFile = File(brainDir, "index.db")
     private val downloader = BrainDownloader()
     private val index = VectorIndex(indexFile)
+    private val sourceStore = SourceStore(context)
     private var embedder: BrainEmbedder? = null
     private var setupJob: Job? = null
 
@@ -60,6 +62,11 @@ class Brain(private val context: Context) {
         if (modelFile.exists()) {
             _state.value = BrainState(phase = BrainPhase.READY, chunks = runCatching { index.count() }.getOrDefault(0))
         }
+        scope.launch { runCatching { sourceStore.load() }; refreshState() }
+    }
+
+    private fun refreshState() {
+        _state.update { it.copy(chunks = runCatching { index.count() }.getOrDefault(0), sources = sourceStore.list()) }
     }
 
     fun ready(): Boolean = _state.value.phase == BrainPhase.READY && modelFile.exists()
@@ -69,7 +76,10 @@ class Brain(private val context: Context) {
         if (setupJob?.isActive == true) return
         setupJob = scope.launch {
             try {
-                if (!modelFile.exists()) {
+                // Only a checksum-verified bundle may be reused; anything else (an older model,
+                // a half-written file) is replaced. Other .litertlm leftovers are dropped.
+                brainDir.listFiles()?.filter { it.name.endsWith(".litertlm") && it != modelFile }?.forEach { it.delete() }
+                if (!Digests.matches(modelFile, BrainSpec.MODEL_SHA256)) {
                     _state.update { it.copy(phase = BrainPhase.DOWNLOADING, error = "", downloadedBytes = 0, totalBytes = BrainSpec.MODEL_BYTES) }
                     downloader.fetch(modelFile) { done, total ->
                         _state.update { it.copy(downloadedBytes = done, totalBytes = total) }
@@ -158,6 +168,73 @@ class Brain(private val context: Context) {
         scope.launch { runCatching { mutex.withLock { index.delete(BrainChunks.fact(key, "").ref) } } }
     }
 
+    /**
+     * Adds knowledge from a link (fetched and stripped to text) or pasted document text.
+     * Returns an error message, or null on success. Adding the same link again refreshes it.
+     */
+    suspend fun addSource(input: String): String? {
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) return "Nothing to add."
+        if (!ready()) return "Set up the brain first."
+        return withContext(Dispatchers.IO) {
+            try {
+                val title: String
+                val origin: String
+                val text: String
+                if (WebText.isUrl(trimmed)) {
+                    val fetched = fetchPage(trimmed)
+                    origin = trimmed
+                    title = WebText.title(fetched).ifBlank { trimmed }
+                    text = WebText.strip(fetched)
+                } else {
+                    origin = "pasted text"
+                    title = trimmed.lineSequence().first().trim().take(120).ifBlank { "Pasted text" }
+                    text = trimmed
+                }
+                if (text.isBlank()) return@withContext "That source had no readable text."
+                val existing = sourceStore.list().firstOrNull { it.origin == origin }
+                val record = SourceRecord(
+                    id = existing?.id ?: ("s" + System.currentTimeMillis().toString(36) + kotlin.random.Random.nextInt(0x1000, 0x10000).toString(36)),
+                    title = title,
+                    origin = origin,
+                    ts = System.currentTimeMillis(),
+                    text = text,
+                )
+                sourceStore.add(record)
+                mutex.withLock { index.deleteByRefPrefix("source:${record.id}:") }
+                for ((part, piece) in WebText.chunk(text).withIndex()) {
+                    store(BrainChunks.source(record.id, record.title, record.origin, part, piece, record.ts))
+                }
+                refreshState()
+                null
+            } catch (e: Exception) {
+                e.message ?: e.javaClass.simpleName
+            }
+        }
+    }
+
+    /** Removes one knowledge source and all its chunks. */
+    suspend fun removeSource(id: String) {
+        withContext(Dispatchers.IO) {
+            sourceStore.remove(id)
+            mutex.withLock { index.deleteByRefPrefix("source:$id:") }
+            refreshState()
+        }
+    }
+
+    fun sources(): List<SourceRecord> = sourceStore.list()
+
+    private fun fetchPage(url: String): String {
+        val request = okhttp3.Request.Builder().url(url).build()
+        dev.humanagent.llm.LlmClient.sharedClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IllegalStateException("Fetching the link failed with HTTP ${response.code}")
+            val body = response.body ?: throw IllegalStateException("That link returned no content")
+            val bytes = body.bytes()
+            if (bytes.size > 2 * 1024 * 1024) throw IllegalStateException("That page is larger than 2 MB")
+            return String(bytes, Charsets.UTF_8)
+        }
+    }
+
     private suspend fun store(chunk: BrainChunk) {
         mutex.withLock {
             val embedder = embedder()
@@ -195,6 +272,11 @@ class Brain(private val context: Context) {
         }
         for ((key, value) in memory.snapshot()) {
             chunks.add(BrainChunks.fact(key, value))
+        }
+        for (record in sourceStore.list()) {
+            for ((part, piece) in WebText.chunk(record.text).withIndex()) {
+                chunks.add(BrainChunks.source(record.id, record.title, record.origin, part, piece, record.ts))
+            }
         }
 
         mutex.withLock {

@@ -1,0 +1,4 @@
+Brain setup fixed, plus knowledge sources.
+
+* Setup now downloads the EmbeddingGemma 2 text+vision bundle the engine expects — the text-only file was missing the vision part, so setup failed at "tf_lite_vision_encoder not found".
+* New: add links and documents as knowledge. Paste a URL or text under the brain; pages are fetched, cleaned to text and indexed. Chat, tasks and Auto mode recall them. Re-adding a link refreshes it; delete any source any time.

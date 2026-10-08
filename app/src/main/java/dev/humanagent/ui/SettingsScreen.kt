@@ -893,6 +893,8 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             val brain = HumanPhoneApp.instance.brain
             val brainState by brain.state.collectAsState()
             var showRemoveBrainDialog by remember { mutableStateOf(false) }
+            var sourceInput by remember { mutableStateOf("") }
+            var sourceError by remember { mutableStateOf<String?>(null) }
             Text(
                 text = stringResource(R.string.brain_detail),
                 style = MaterialTheme.typography.bodySmall,
@@ -946,6 +948,68 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                         }
                         OutlinedButton(onClick = { showRemoveBrainDialog = true }) {
                             Text(stringResource(R.string.brain_remove))
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = sourceInput,
+                        onValueChange = { sourceInput = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.brain_source_label)) },
+                        placeholder = { Text(stringResource(R.string.brain_source_hint)) },
+                        singleLine = true,
+                    )
+                    Button(
+                        onClick = {
+                            val input = sourceInput
+                            scope.launch {
+                                sourceError = brain.addSource(input)
+                                if (sourceError == null) sourceInput = ""
+                            }
+                        },
+                        enabled = sourceInput.isNotBlank(),
+                    ) {
+                        Text(stringResource(R.string.brain_source_add))
+                    }
+                    sourceError?.let { problem ->
+                        Text(
+                            text = problem,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (brainState.sources.isNotEmpty()) {
+                        Text(
+                            text = stringResource(R.string.brain_sources_title),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        )
+                        brainState.sources.asReversed().forEach { source ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = source.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        text = source.origin,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                IconButton(onClick = { scope.launch { brain.removeSource(source.id) } }) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Delete,
+                                        contentDescription = stringResource(R.string.brain_source_delete),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
