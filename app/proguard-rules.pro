@@ -7,3 +7,17 @@
 -keepclasseswithmembers class dev.humanagent.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
+
+# The MediaPipe / LiteRT-LM engines read protobuf-generated messages and their fields
+# reflectively from JNI by exact name (e.g. MediaPipeLoggingProto$SystemInfo.platform_).
+# Renaming or stripping those members breaks engine creation at setup time.
+-keep class com.google.mediapipe.** { *; }
+-keep class com.google.ai.edge.litertlm.** { *; }
+-keep class com.google.ai.edge.litert.** { *; }
+
+# Optional pieces of the full MediaPipe framework the slim tasks distribution does not ship:
+# an auto-value compile-time annotation, and profiler/graph-template protos referenced only
+# from GraphProfiler and Graph.loadBinaryGraphTemplate — none of which the embedder runs.
+-dontwarn com.google.auto.value.extension.memoized.Memoized
+-dontwarn com.google.mediapipe.proto.CalculatorProfileProto$CalculatorProfile
+-dontwarn com.google.mediapipe.proto.GraphTemplateProto$CalculatorGraphTemplate
