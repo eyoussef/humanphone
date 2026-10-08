@@ -13,8 +13,8 @@ android {
         applicationId = "dev.humanagent"
         minSdk = 30
         targetSdk = 35
-        versionCode = 23
-        versionName = "1.20.1"
+        versionCode = 24
+        versionName = "1.21"
     }
 
     buildTypes {
@@ -51,6 +51,12 @@ android {
     }
 }
 
+// tasks-retrieval (LiteRT-LM) ships modules built with a newer Kotlin than this project;
+// the metadata format is readable, only the version gate trips.
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    compilerOptions.freeCompilerArgs.add("-Xskip-metadata-version-check")
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.compose.ui:ui")
@@ -69,6 +75,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.mediapipe:tasks-retrieval:1.1.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 

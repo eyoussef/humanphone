@@ -51,6 +51,7 @@ class AgentLoop(
     private val memory: MemoryStore,
     private val ledger: RunLedger,
     private val speaker: Speaker,
+    private val brain: dev.humanagent.brain.Brain,
 ) {
 
     private val _state = MutableStateFlow(AgentRunState())
@@ -120,12 +121,13 @@ class AgentLoop(
         val launches = AppLaunchCache(context)
         runCatching { launches.load() }
         val executor = UiActionExecutor(service, reader, settings.directSms, launches)
-        val tools = AgentTools(context, memory, ledger, speaker, skills, activeObligation)
+        val tools = AgentTools(context, memory, ledger, speaker, skills, activeObligation, brain)
         val client = LlmClient(config)
         val conversation = mutableListOf<Message>()
         // The head is rebuilt every step: live obligations and memory live in the pinned part,
         // so no amount of tail trimming can make the agent forget it owes a result.
-        conversation += Message.system(buildSystemPrompt(settings))
+        val recalled = brain.recall(command)
+        conversation += Message.system(buildSystemPrompt(settings, recalled))
         conversation += Message.user(command)
 
         var stepIndex = 0
@@ -135,7 +137,7 @@ class AgentLoop(
         val loopWatch = LoopWatch()
         while (stepIndex < settings.maxSteps && currentCoroutineContext().isActive) {
             stepIndex++
-            conversation[0] = Message.system(buildSystemPrompt(settings))
+            conversation[0] = Message.system(buildSystemPrompt(settings, recalled))
             val snapshot = reader.snapshot()
             val screenWarning = loopWatch.noteScreen(snapshot.rendered)
             if (loopWatch.stalledTooLong()) {
@@ -275,6 +277,7 @@ class AgentLoop(
         }
         val app = obligation?.app.orEmpty().ifBlank { executor.foregroundApp().label }
         memory.addEpisode(command, _state.value.lastReply.ifBlank { "the run ended without a summary" }, app, status)
+        brain.rememberEpisode(command, _state.value.lastReply.ifBlank { "the run ended without a summary" }, app)
     }
 
     /** Streams the next model turn, retrying once on transient provider failures. */
@@ -337,7 +340,7 @@ class AgentLoop(
         }
     }
 
-    private fun buildSystemPrompt(settings: AppSettings): String = buildString {
+    private fun buildSystemPrompt(settings: AppSettings, recalled: String?): String = buildString {
         append(settings.persona)
         append("\n\nYou are now driving this Android phone for real, through the accessibility service.\n")
         append("How you work:\n")
@@ -380,6 +383,10 @@ class AgentLoop(
         }
         append('\n')
         append(memory.render())
+        if (recalled != null) {
+            append("\n\n")
+            append(recalled)
+        }
     }
 
     private fun step(kind: String, title: String, detail: String) {

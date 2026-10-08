@@ -1,0 +1,5 @@
+The assistant gets a real brain: on-device memory search.
+
+* Settings - Set up the brain: one 157 MB download of EmbeddingGemma 2 (text, Apache-2.0) running on the phone. Chats, tasks and facts get indexed locally.
+* Chat, tasks and Auto mode recall the relevant memories in milliseconds. Recalled lines join the prompts you already send to your model; model and index never leave the phone.
+* Without the brain the app behaves exactly as before. Re-index or remove any time.
