@@ -87,6 +87,8 @@
     <string name="brain_source_label">Add knowledge</string>
     <string name="brain_source_hint">Paste a link (https://…) or document text</string>
     <string name="brain_source_add">Add to brain</string>
+    <string name="brain_source_upload">Add file</string>
     <string name="brain_source_delete">Remove this source</string>
     <string name="brain_sources_title">Knowledge sources</string>
+    <string name="save_to_downloads">Save to Downloads</string>
 </resources>

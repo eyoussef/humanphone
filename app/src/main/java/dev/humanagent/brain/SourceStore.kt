@@ -21,6 +21,10 @@ data class SourceRecord(
     val origin: String,
     val ts: Long,
     val text: String,
+    /** "text" for links and documents, "image" for uploaded pictures (embedded visually). */
+    val kind: String = "text",
+    /** For images: the JPEG kept under the brain directory. */
+    val file: String = "",
 )
 
 /** The user's knowledge sources, bounded so the brain stays small. */

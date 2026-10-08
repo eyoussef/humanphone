@@ -21,3 +21,8 @@
 -dontwarn com.google.auto.value.extension.memoized.Memoized
 -dontwarn com.google.mediapipe.proto.CalculatorProfileProto$CalculatorProfile
 -dontwarn com.google.mediapipe.proto.GraphTemplateProto$CalculatorGraphTemplate
+
+# pdfbox-android's optional JPEG2000 codec (not shipped); only JPEG2000-filtered embedded
+# images in PDFs would touch it — the brain extracts text and the renderer writes plain text.
+-dontwarn com.gemalto.jp2.JP2Decoder
+-dontwarn com.gemalto.jp2.JP2Encoder

@@ -13,8 +13,8 @@ android {
         applicationId = "dev.humanagent"
         minSdk = 30
         targetSdk = 35
-        versionCode = 26
-        versionName = "1.23"
+        versionCode = 27
+        versionName = "1.24"
     }
 
     buildTypes {
@@ -80,6 +80,8 @@ dependencies {
     // com.google.ai.edge.litertlm.ActivationDataType that tasks-retrieval itself references
     // (R8 missing-class failure, and a runtime crash risk on engine creation). 0.18.0 has it.
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
+    // PDF text extraction for knowledge uploads and PDF rendering for documents (Apache-2.0).
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 

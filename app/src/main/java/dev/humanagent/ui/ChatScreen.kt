@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
@@ -65,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -571,6 +573,7 @@ fun ChatScreen(
 
 @Composable
 private fun MessageBubble(turn: ChatTurn) {
+    val context = LocalContext.current
     val isUser = turn.role.equals("user", ignoreCase = true)
     val isSystem = turn.role.equals("system", ignoreCase = true)
     val container = when {
@@ -656,9 +659,49 @@ private fun MessageBubble(turn: ChatTurn) {
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        IconButton(
+                            onClick = {
+                                val message = saveToDownloads(context, attachment)
+                                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Download,
+                                contentDescription = stringResource(R.string.save_to_downloads),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/** Copies a chat attachment into the phone's Downloads folder. Returns what to tell the user. */
+private fun saveToDownloads(context: android.content.Context, attachment: Attachment): String {
+    val source = java.io.File(attachment.path)
+    if (!source.exists()) return "The file is gone from storage."
+    val resolver = context.contentResolver
+    val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, attachment.name)
+        put(android.provider.MediaStore.Downloads.MIME_TYPE, attachment.mimeType)
+        put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+        put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+    }
+    val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        ?: return "Could not save the file."
+    return runCatching {
+        resolver.openOutputStream(uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
+        values.clear()
+        values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        "Saved to Downloads"
+    }.getOrElse {
+        runCatching { resolver.delete(uri, null, null) }
+        "Could not save the file."
     }
 }

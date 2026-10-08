@@ -144,6 +144,23 @@ class AttachmentStore(private val context: Context) {
         )
     }
 
+    /** Adopts an app-produced file (a rendered document) as a chat attachment. */
+    suspend fun adopt(file: File, mimeType: String): Result<Attachment> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(file.exists() && file.length() > 0) { "\"${file.name}\" is missing or empty." }
+            require(file.length() <= MAX_FILE_BYTES) { "\"${file.name}\" is larger than ${MAX_FILE_BYTES / MEGABYTE} MB." }
+            val target = File(dir, "${newId()}.${extensionOf(file.name).ifEmpty { "bin" }}")
+            file.copyTo(target, overwrite = true)
+            Attachment(
+                name = file.name,
+                mimeType = mimeType.ifBlank { "application/octet-stream" },
+                kind = KIND_FILE,
+                path = target.absolutePath,
+                sizeBytes = target.length(),
+            )
+        }
+    }
+
     private fun resolveName(uri: Uri): String {
         val fromProvider = runCatching {
             context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->

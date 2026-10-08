@@ -29,6 +29,9 @@ object BrainSpec {
     /** The index is bounded; the oldest chunks drop off the end. */
     const val MAX_CHUNKS = 4_000
 
+    /** Uploaded knowledge files are capped so one PDF cannot eat the phone. */
+    const val MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
     /** How many memories ride along with one prompt. */
     const val RECALL_HITS = 6
 
@@ -99,6 +102,9 @@ object BrainChunks {
             text = text,
             ts = ts,
         )
+
+    /** The source id inside a source chunk ref ("source:<id>:<part>"). */
+    fun sourceId(ref: String): String = ref.removePrefix("source:").substringBefore(':')
 }
 
 /** Turning a fetched page or pasted document into plain text and index-sized chunks. Pure. */

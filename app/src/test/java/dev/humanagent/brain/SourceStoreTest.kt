@@ -44,6 +44,21 @@ class SourceStoreTest {
     }
 
     @Test
+    fun imageSourcesCarryTheirKindAndFile() = runTest {
+        val file = fresh()
+        val store = SourceStore(file)
+        store.load()
+        store.add(SourceRecord("s9", "Whiteboard", "Whiteboard", 3L, text = "", kind = "image", file = "src_s9.jpg"))
+
+        val reloaded = SourceStore(file)
+        reloaded.load()
+        val record = reloaded.list().first()
+        assertEquals("image", record.kind)
+        assertEquals("src_s9.jpg", record.file)
+        file.delete()
+    }
+
+    @Test
     fun oldSourcesDropOffAtTheCap() = runTest {
         val file = fresh()
         val store = SourceStore(file)
