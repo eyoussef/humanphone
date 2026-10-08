@@ -1,0 +1,5 @@
+Max steps per task now goes up to 1000.
+
+The slider in Settings - Agent covered 1 to 50, which ran out for long
+multi-app jobs. It now allows every value up to 1000, so one task can keep
+working through as many steps as it needs.
