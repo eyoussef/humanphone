@@ -12,6 +12,14 @@ voice input settings to install or switch one, and test both speech features wit
 
 There is no HumanPhone account, no vendor backend and no telemetry. The app talks to the model endpoints you configure: a local Ollama server, OpenRouter, or any OpenAI-compatible base URL with /chat/completions. An optional OpenAI-compatible /audio/transcriptions endpoint (for example Whisper) turns dictation into text; without it the phone's own speech recogniser is used.
 
+The assistant learns and keeps improving:
+
+* It cannot get stuck going in circles: identical actions are blocked with guidance back to the model, actions that provably changed nothing are stopped, and a run stuck on one screen ends honestly.
+* It learns where your apps live: the first time an app opens, the name is remembered and the next task opens it directly, with no launcher scan.
+* The brain: an on-device memory model (EmbeddingGemma 2) you download from Settings. Chat exchanges, tasks, notes, links, uploaded PDF/DOCX files and photos are indexed on the phone, and chat, tasks and Auto mode recall the few relevant memories instead of re-reading everything. Recalled photos are shown to the model in chat.
+* It writes real documents: ask for a book or a whitepaper and the agent writes it section by section and renders a .docx or .pdf that lands in the chat with a download button.
+* Long jobs can run up to 1000 steps.
+
 What leaves your device, plainly:
 
 * Every operator step sends the full text of the current screen to the model endpoint — always, with no setting. Your screenshot image is attached only if you turn on screenshot sending.
@@ -20,7 +28,7 @@ What leaves your device, plainly:
 * The agent can also fetch images from a URL the model chooses (capped at 10 MB), and a built-in site-preview tool serves the website the model is building on a loopback address on your phone only.
 * Conversations, memories and the run history are stored locally on the device.
 
-The operator has tools for reading the screen, tapping a node or text, typing and clearing text, scrolling, back/home/recents/notifications, launching apps, opening URLs, placing calls, composing texts, looking up contacts, creating alarms, opening system settings pages, waiting for text to appear, remembering small facts between runs, speaking out loud and finishing with a summary.
+The operator has tools for reading the screen, tapping a node or text, typing and clearing text, scrolling, back/home/recents/notifications, launching apps, opening URLs, placing calls, composing texts, looking up contacts, creating alarms, opening system settings pages, waiting for text to appear, remembering, editing or wiping small facts between runs, writing documents, speaking out loud and finishing with a summary.
 
 The interface ships in English, العربية, Français, Español, Português and हिन्दी (per-app language, Android 13 or newer).
 
