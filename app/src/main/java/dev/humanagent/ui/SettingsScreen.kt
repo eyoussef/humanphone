@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,6 +41,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -67,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.humanagent.HumanPhoneApp
 import dev.humanagent.R
+import dev.humanagent.brain.BrainPhase
 import dev.humanagent.agent.AgentAccessibilityService
 import dev.humanagent.agent.AgentService
 import dev.humanagent.llm.AppSettings
@@ -881,6 +884,96 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                     },
                     dismissButton = {
                         TextButton(onClick = { showClearMemoryDialog = false }) { Text(stringResource(R.string.done)) }
+                    },
+                )
+            }
+        }
+
+        SectionCard(title = stringResource(R.string.brain_title)) {
+            val brain = HumanPhoneApp.instance.brain
+            val brainState by brain.state.collectAsState()
+            var showRemoveBrainDialog by remember { mutableStateOf(false) }
+            Text(
+                text = stringResource(R.string.brain_detail),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            when (brainState.phase) {
+                BrainPhase.ABSENT -> OutlinedButton(onClick = { brain.setup() }) {
+                    Text(stringResource(R.string.brain_setup))
+                }
+
+                BrainPhase.DOWNLOADING -> {
+                    LinearProgressIndicator(
+                        progress = { if (brainState.totalBytes > 0) brainState.downloadedBytes.toFloat() / brainState.totalBytes else 0f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.brain_downloading,
+                            (brainState.downloadedBytes / 1_000_000).toInt(),
+                            (brainState.totalBytes / 1_000_000).toInt(),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = { brain.cancelSetup() }) {
+                        Text(stringResource(R.string.brain_cancel))
+                    }
+                }
+
+                BrainPhase.INDEXING -> {
+                    LinearProgressIndicator(
+                        progress = { if (brainState.totalChunks > 0) brainState.indexedChunks.toFloat() / brainState.totalChunks else 0f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        text = stringResource(R.string.brain_indexing, brainState.indexedChunks, brainState.totalChunks),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                BrainPhase.READY -> {
+                    Text(
+                        text = stringResource(R.string.brain_ready, brainState.chunks),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { brain.reindex() }) {
+                            Text(stringResource(R.string.brain_reindex))
+                        }
+                        OutlinedButton(onClick = { showRemoveBrainDialog = true }) {
+                            Text(stringResource(R.string.brain_remove))
+                        }
+                    }
+                }
+
+                BrainPhase.FAILED -> {
+                    Text(
+                        text = stringResource(R.string.brain_failed, brainState.error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    OutlinedButton(onClick = { brain.setup() }) {
+                        Text(stringResource(R.string.brain_retry))
+                    }
+                }
+            }
+            if (showRemoveBrainDialog) {
+                AlertDialog(
+                    onDismissRequest = { showRemoveBrainDialog = false },
+                    title = { Text(stringResource(R.string.brain_remove)) },
+                    text = { Text(stringResource(R.string.brain_remove_confirm)) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showRemoveBrainDialog = false
+                            scope.launch { brain.remove() }
+                        }) { Text(stringResource(R.string.brain_remove)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showRemoveBrainDialog = false }) { Text(stringResource(R.string.done)) }
                     },
                 )
             }

@@ -33,6 +33,7 @@ class ChatEngine(
     private val settingsStore: SettingsStore,
     private val speaker: Speaker,
     private val memory: MemoryStore,
+    private val brain: dev.humanagent.brain.Brain,
 ) {
 
     /** Entry point for the chat screen: files are copied into app storage when they are imported. */
@@ -189,14 +190,24 @@ class ChatEngine(
             else -> replaceLast("The model returned nothing. Try again.")
         }
         persist()
+        if (answer != null) {
+            val userText = _messages.value.lastOrNull { it.role == ROLE_USER }?.text.orEmpty()
+            val title = _conversations.value.firstOrNull { it.id == _activeId.value }?.title.orEmpty()
+            brain.rememberExchange(_activeId.value, title, userText, answer, now())
+        }
     }
 
     private suspend fun history(settings: AppSettings): List<Message> {
         val messages = ArrayList<Message>()
-        messages += Message.system(systemPrompt(settings))
         val turns = _messages.value
             .filter { it.text.isNotBlank() || it.attachments.isNotEmpty() }
             .takeLast(HISTORY_TURNS)
+        // The brain adds what matters from older chats and tasks; without it the prompt is
+        // exactly what it always was.
+        val recalled = brain.recall(turns.lastOrNull { it.role == ROLE_USER }?.text.orEmpty())
+        messages += Message.system(
+            if (recalled != null) systemPrompt(settings) + "\n\n" + recalled else systemPrompt(settings),
+        )
         // Only the newest image turns keep their payloads: images are heavy and the model mostly
         // needs the one the user just sent. Older ones stay visible as a line of text.
         val payloadTurns = turns.indices

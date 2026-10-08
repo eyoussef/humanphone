@@ -2,6 +2,7 @@ package dev.humanagent
 
 import android.app.Application
 import dev.humanagent.agent.MemoryStore
+import dev.humanagent.brain.Brain
 import dev.humanagent.agent.RunLedger
 import dev.humanagent.chat.ChatEngine
 import dev.humanagent.llm.SettingsStore
@@ -21,6 +22,8 @@ class HumanPhoneApp : Application() {
         private set
     lateinit var ledger: RunLedger
         private set
+    lateinit var brain: dev.humanagent.brain.Brain
+        private set
     lateinit var speaker: Speaker
         private set
     lateinit var voice: VoiceIO
@@ -36,9 +39,10 @@ class HumanPhoneApp : Application() {
         settingsStore = SettingsStore(this)
         memory = MemoryStore(this)
         ledger = RunLedger(this)
+        brain = Brain(this)
         speaker = Speaker(this, settingsStore)
         voice = VoiceIO(this)
-        chatEngine = ChatEngine(this, settingsStore, speaker, memory)
+        chatEngine = ChatEngine(this, settingsStore, speaker, memory, brain)
         scope.launch {
             memory.load()
             ledger.load()

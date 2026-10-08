@@ -91,6 +91,19 @@ is remembered (every spelling the model used), and the next task opens that app 
 without re-scanning the phone's launchers. The memory is bounded, and an uninstalled app is
 re-learned automatically on the next open.
 
+### The brain (on-device memory search)
+
+*Settings → Assistant brain* turns on real recall: a one-time 157 MB download of **EmbeddingGemma
+2** (text-only, Apache-2.0, [litert-community bundle](https://huggingface.co/litert-community/embeddinggemma-2-text-270m-litert-lm)),
+verified against a pinned SHA-256 and run fully on-device via the MediaPipe Universal Embedder.
+Chat exchanges, task episodes and facts are embedded into a local vector index (Matryoshka 256d);
+chat, the agent and Auto mode then pull the few relevant memories into their prompts in
+milliseconds — instead of re-reading whole conversations.
+
+Honest data flow: the model and the index never leave the phone, and search happens locally, but
+the recalled memories are ordinary prompt text — they ride along with the prompts you already
+send to your own model endpoint. Without the brain the app behaves exactly as before.
+
 A task that promises a result to a conversation also opens an obligation in the ledger. It
 survives context trimming, the run ending and the process dying: the system prompt shows it at
 every step, `finish` is refused while it is open, a run that ends anyway counts a failed

@@ -43,6 +43,7 @@ class AgentTools(
     private val skills: SkillStore,
     /** The owed-result obligation this run works off, or null for a task that owes nothing. */
     private val obligation: Obligation? = null,
+    private val brain: dev.humanagent.brain.Brain,
 ) {
 
     private val board = OfferBoard()
@@ -477,6 +478,7 @@ class AgentTools(
                     val key = requireString(args, "key")
                     val value = requireString(args, "value")
                     memory.put(key, value)
+                    brain.rememberFact(key, value)
                     ToolOutcome("Remembered: $key.", includeScreen = false)
                 }
                 "remember_person" -> {
@@ -491,14 +493,18 @@ class AgentTools(
                 }
                 "recall" -> ToolOutcome(memory.render(), includeScreen = false)
                 "forget" -> {
-                    val removed = memory.removeFact(requireString(args, "key"))
+                    val key = requireString(args, "key")
+                    val removed = memory.removeFact(key)
+                    if (removed) brain.forgetFact(key)
                     ToolOutcome(
                         if (removed) "Forgot it." else "No fact with that key. Call recall to see the exact keys.",
                         includeScreen = false,
                     )
                 }
                 "clear_memory" -> {
+                    val keys = memory.snapshot().keys.toList()
                     val count = memory.clearFacts()
+                    keys.forEach { brain.forgetFact(it) }
                     ToolOutcome(
                         "Cleared $count fact${if (count == 1) "" else "s"}. People and past tasks are kept.",
                         includeScreen = false,
