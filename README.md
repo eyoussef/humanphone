@@ -101,9 +101,19 @@ vector index (Matryoshka 256d); chat, the agent and Auto mode then pull the few 
 into their prompts in milliseconds — instead of re-reading whole conversations.
 
 Knowledge sources are links and documents you add from the same card: a pasted URL is fetched and
-cleaned to text (scripts and markup stripped), pasted text is taken as-is; both are chunked into
-the index and recalled like anything else. Re-adding a link refreshes it; every source can be
-removed individually.
+cleaned to text (scripts and markup stripped), pasted text is taken as-is, and uploaded files are
+read — PDF and DOCX become text, images go in through the model's vision encoder so a text query
+retrieves the right photo (and chat shows it to the model when recalled). All of it is chunked
+into the index and recalled like anything else. Re-adding a link refreshes it; every source can
+be removed individually.
+
+### Documents
+
+The agent writes real documents the way it builds websites: `create_doc`, then
+`write_doc_section` once per chapter with the full prose (never an outline), then `render_doc`
+as **.docx** or **.pdf**. The rendered file posts into the chat with a download button that
+saves it to Downloads — no Google Docs round-trip, no step-burning UI navigation; the model's
+tokens go into the writing itself.
 
 Honest data flow: the model and the index never leave the phone, and search happens locally, but
 the recalled memories are ordinary prompt text — they ride along with the prompts you already

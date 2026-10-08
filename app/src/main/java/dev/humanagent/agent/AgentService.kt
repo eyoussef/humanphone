@@ -212,7 +212,7 @@ class AgentService : Service() {
             Log.i(AUTO_TAG, "No model configured — cannot classify anything.")
             return null
         }
-        val recalled = HumanPhoneApp.instance.brain.recall(NotificationBus.describe(event))
+        val recalled = HumanPhoneApp.instance.brain.recall(NotificationBus.describe(event))?.text
         val prompt = buildString {
             appendLine("New notification:")
             appendLine(NotificationBus.describe(event))

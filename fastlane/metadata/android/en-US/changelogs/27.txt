@@ -1,0 +1,4 @@
+Upload knowledge files and write real documents.
+
+* Knowledge sources accept files: PDF and DOCX are read to text, and images are embedded with the model's vision side — ask with words, get the right photo back. Recalled photos are shown to the model in chat.
+* New agent tools: create_doc, write_doc_section, render_doc. A book or whitepaper is written section by section and rendered as a real .docx or .pdf, posted in the chat with a download button.

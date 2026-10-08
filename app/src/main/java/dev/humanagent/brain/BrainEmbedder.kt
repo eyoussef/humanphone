@@ -2,6 +2,7 @@ package dev.humanagent.brain
 
 import android.content.Context
 import android.os.ParcelFileDescriptor
+import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.retrieval.universalembedder.UniversalEmbedder
 import com.google.mediapipe.tasks.retrieval.universalembedder.UniversalEmbedderOptions
@@ -22,6 +23,13 @@ class BrainEmbedder(
     fun embed(text: String): FloatArray {
         val active = engine ?: create().also { engine = it }
         val result = active.embedText(text)
+        return result.embeddings().first().floatEmbedding()
+    }
+
+    /** Same vector space as [embed], for pictures (EmbeddingGemma 2's vision side). */
+    fun embedImage(bitmap: android.graphics.Bitmap): FloatArray {
+        val active = engine ?: create().also { engine = it }
+        val result = active.embedImage(BitmapImageBuilder(bitmap).build())
         return result.embeddings().first().floatEmbedding()
     }
 

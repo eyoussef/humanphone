@@ -49,6 +49,7 @@ class AgentTools(
     private val board = OfferBoard()
     private val workspace: SiteWorkspace by lazy { SiteWorkspace(context) }
     private val siteServer: SiteServer by lazy { SiteServer { workspace.currentDir() } }
+    private val docs: dev.humanagent.doc.DocWorkspace by lazy { dev.humanagent.doc.DocWorkspace(context) }
     private val confirmations = mutableMapOf<String, Int>()
     private val refusedFinishes = mutableMapOf<String, Int>()
 
@@ -396,6 +397,38 @@ class AgentTools(
         )
         add(
             ToolSpec(
+                name = "create_doc",
+                description = "Start a document the user asked for (book, whitepaper, report): a project of written sections. Use before write_doc_section.",
+                parameters = schema(listOf("name"), "name" to stringProp("document title, e.g. \"AI in Schools\"")),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "write_doc_section",
+                description = "Write one section of the document with its full real content — never a placeholder or outline. The body is the actual prose of the chapter, however long it needs to be.",
+                parameters = schema(
+                    listOf("title", "body"),
+                    "title" to stringProp("section title, e.g. \"Chapter 1: Origins\""),
+                    "body" to stringProp("the section's full text"),
+                ),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "list_doc_sections",
+                description = "List the document's sections and rendered files so far.",
+                parameters = schema(),
+            )
+        )
+        add(
+            ToolSpec(
+                name = "render_doc",
+                description = "Render the finished document as a real file (docx or pdf). It appears in the chat with a download button; say so in the finish summary.",
+                parameters = schema(emptyList(), "format" to stringProp("file format", listOf("docx", "pdf"))),
+            )
+        )
+        add(
+            ToolSpec(
                 name = "preview_site",
                 description = "Serve the site from the phone and open it in the browser to check the real look. Polish what looks wrong, then finish with the local address.",
                 parameters = schema(),
@@ -564,6 +597,44 @@ class AgentTools(
                 "close_site_preview" -> {
                     siteServer.stop()
                     ToolOutcome("Preview server stopped.", includeScreen = false)
+                }
+                "create_doc" -> {
+                    val dir = docs.open(requireString(args, "name"))
+                    ToolOutcome(
+                        "Document \"${docs.name()}\" started (${dir.name}). Write it with write_doc_section — " +
+                            "one call per chapter or section, each with the full real text.",
+                        includeScreen = false,
+                    )
+                }
+                "write_doc_section" -> {
+                    val title = requireString(args, "title")
+                    docs.addSection(title, requireString(args, "body"))
+                    ToolOutcome(
+                        "Section \"$title\" added (${docs.sections().size} total). Keep going until the whole work is written.",
+                        includeScreen = false,
+                    )
+                }
+                "list_doc_sections" -> ToolOutcome(docs.list(), includeScreen = false)
+                "render_doc" -> {
+                    val format = (JsonArgs.string(args, "format") ?: "pdf").lowercase()
+                    require(format == "pdf" || format == "docx") { "format must be \"docx\" or \"pdf\"" }
+                    dev.humanagent.doc.Pdf.ensureInit(context)
+                    val file = docs.render(format)
+                    val mime = if (format == "docx") {
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    } else {
+                        "application/pdf"
+                    }
+                    val count = docs.sections().size
+                    dev.humanagent.HumanPhoneApp.instance.chatEngine.attachResult(
+                        file,
+                        mime,
+                        "Done — ${file.name} ($count sections) is ready. Use the download button to save it.",
+                    )
+                    ToolOutcome(
+                        "Rendered ${file.name} ($count sections) and attached it to the chat with a download button. Call finish and name the file.",
+                        includeScreen = false,
+                    )
                 }
                 "confirm_delivered" -> confirmDelivered(requireString(args, "result"), executor)
                 "finish" -> {

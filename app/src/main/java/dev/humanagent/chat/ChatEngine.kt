@@ -197,16 +197,25 @@ class ChatEngine(
         }
     }
 
+    /** Puts an app-produced file (a rendered document) into the active chat. */
+    fun attachResult(file: java.io.File, mimeType: String, note: String) {
+        scope.launch {
+            val adopted = attachments.adopt(file, mimeType).getOrNull() ?: return@launch
+            append(ChatTurn(ROLE_ASSISTANT, note, now(), listOf(adopted)))
+            persist()
+        }
+    }
+
     private suspend fun history(settings: AppSettings): List<Message> {
         val messages = ArrayList<Message>()
         val turns = _messages.value
             .filter { it.text.isNotBlank() || it.attachments.isNotEmpty() }
             .takeLast(HISTORY_TURNS)
         // The brain adds what matters from older chats and tasks; without it the prompt is
-        // exactly what it always was.
+        // exactly what it always was. Recalled photos ride with the question so the model sees them.
         val recalled = brain.recall(turns.lastOrNull { it.role == ROLE_USER }?.text.orEmpty())
         messages += Message.system(
-            if (recalled != null) systemPrompt(settings) + "\n\n" + recalled else systemPrompt(settings),
+            if (recalled != null) systemPrompt(settings) + "\n\n" + recalled.text else systemPrompt(settings),
         )
         // Only the newest image turns keep their payloads: images are heavy and the model mostly
         // needs the one the user just sent. Older ones stay visible as a line of text.
@@ -285,6 +294,14 @@ class ChatEngine(
                 builder.append(extra.toString().trimEnd())
             }
             messages += Message.user(builder.toString(), images, files)
+        }
+        // Recalled photos ride with the question being asked, where vision models expect images.
+        if (recalled != null && recalled.images.isNotEmpty()) {
+            val lastIndex = messages.indexOfLast { it.role == "user" }
+            if (lastIndex >= 0) {
+                val last = messages[lastIndex]
+                messages[lastIndex] = last.copy(images = last.images + recalled.images)
+            }
         }
         return messages
     }

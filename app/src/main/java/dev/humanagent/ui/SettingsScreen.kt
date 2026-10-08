@@ -895,6 +895,11 @@ fun SettingsScreen(settingsStore: SettingsStore) {
             var showRemoveBrainDialog by remember { mutableStateOf(false) }
             var sourceInput by remember { mutableStateOf("") }
             var sourceError by remember { mutableStateOf<String?>(null) }
+            val sourceFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) {
+                    scope.launch { sourceError = brain.addSourceFile(uri) }
+                }
+            }
             Text(
                 text = stringResource(R.string.brain_detail),
                 style = MaterialTheme.typography.bodySmall,
@@ -959,17 +964,33 @@ fun SettingsScreen(settingsStore: SettingsStore) {
                         placeholder = { Text(stringResource(R.string.brain_source_hint)) },
                         singleLine = true,
                     )
-                    Button(
-                        onClick = {
-                            val input = sourceInput
-                            scope.launch {
-                                sourceError = brain.addSource(input)
-                                if (sourceError == null) sourceInput = ""
-                            }
-                        },
-                        enabled = sourceInput.isNotBlank(),
-                    ) {
-                        Text(stringResource(R.string.brain_source_add))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                val input = sourceInput
+                                scope.launch {
+                                    sourceError = brain.addSource(input)
+                                    if (sourceError == null) sourceInput = ""
+                                }
+                            },
+                            enabled = sourceInput.isNotBlank(),
+                        ) {
+                            Text(stringResource(R.string.brain_source_add))
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                sourceFilePicker.launch(
+                                    arrayOf(
+                                        "application/pdf",
+                                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                        "text/*",
+                                        "image/*",
+                                    ),
+                                )
+                            },
+                        ) {
+                            Text(stringResource(R.string.brain_source_upload))
+                        }
                     }
                     sourceError?.let { problem ->
                         Text(
