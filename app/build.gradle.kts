@@ -76,6 +76,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.mediapipe:tasks-retrieval:1.1.0")
+    // tasks-retrieval pins litertlm-android 0.17.0-alpha1, which lacks
+    // com.google.ai.edge.litertlm.ActivationDataType that tasks-retrieval itself references
+    // (R8 missing-class failure, and a runtime crash risk on engine creation). 0.18.0 has it.
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
