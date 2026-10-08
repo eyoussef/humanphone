@@ -93,12 +93,17 @@ re-learned automatically on the next open.
 
 ### The brain (on-device memory search)
 
-*Settings → Assistant brain* turns on real recall: a one-time 157 MB download of **EmbeddingGemma
-2** (text-only, Apache-2.0, [litert-community bundle](https://huggingface.co/litert-community/embeddinggemma-2-text-270m-litert-lm)),
+*Settings → Assistant brain* turns on real recall: a one-time 388 MB download of **EmbeddingGemma
+2** (text + vision, Apache-2.0, [litert-community bundle](https://huggingface.co/litert-community/embeddinggemma-2-text-vision-440m-litert-lm)),
 verified against a pinned SHA-256 and run fully on-device via the MediaPipe Universal Embedder.
-Chat exchanges, task episodes and facts are embedded into a local vector index (Matryoshka 256d);
-chat, the agent and Auto mode then pull the few relevant memories into their prompts in
-milliseconds — instead of re-reading whole conversations.
+Chat exchanges, task episodes, facts and your own **knowledge sources** are embedded into a local
+vector index (Matryoshka 256d); chat, the agent and Auto mode then pull the few relevant memories
+into their prompts in milliseconds — instead of re-reading whole conversations.
+
+Knowledge sources are links and documents you add from the same card: a pasted URL is fetched and
+cleaned to text (scripts and markup stripped), pasted text is taken as-is; both are chunked into
+the index and recalled like anything else. Re-adding a link refreshes it; every source can be
+removed individually.
 
 Honest data flow: the model and the index never leave the phone, and search happens locally, but
 the recalled memories are ordinary prompt text — they ride along with the prompts you already

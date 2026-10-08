@@ -73,15 +73,20 @@
     <string name="memory_clear_confirm">Delete every fact the assistant remembers? People and past tasks are kept. This cannot be undone.</string>
 
     <string name="brain_title">Assistant brain</string>
-    <string name="brain_detail">Downloads an on-device memory model once (EmbeddingGemma 2, 157 MB) and indexes your chats, tasks and facts on the phone. When you chat or run a task, the most relevant memories are added to the prompts you already send to your model. The model and the index never leave the phone.</string>
-    <string name="brain_setup">Set up the brain (157 MB)</string>
+    <string name="brain_detail">Downloads an on-device memory model once (EmbeddingGemma 2, 388 MB) and indexes your chats, tasks and facts on the phone. Add links and documents as knowledge sources too. When you chat or run a task, the most relevant memories are added to the prompts you already send to your model. The model and the index never leave the phone.</string>
+    <string name="brain_setup">Set up the brain (388 MB)</string>
     <string name="brain_cancel">Cancel</string>
     <string name="brain_reindex">Re-index</string>
     <string name="brain_remove">Remove brain</string>
     <string name="brain_remove_confirm">Delete the model and the whole memory index? Chats and notes stay; only the search is gone.</string>
-    <string name="brain_ready">Ready — %1$d memories searchable. Model: EmbeddingGemma 2 (text).</string>
+    <string name="brain_ready">Ready — %1$d memories searchable. Model: EmbeddingGemma 2 (text + vision).</string>
     <string name="brain_downloading">Downloading the model… %1$d MB of %2$d MB</string>
     <string name="brain_indexing">Indexing memories… %1$d of %2$d</string>
     <string name="brain_failed">Setup failed: %1$s</string>
     <string name="brain_retry">Retry</string>
+    <string name="brain_source_label">Add knowledge</string>
+    <string name="brain_source_hint">Paste a link (https://…) or document text</string>
+    <string name="brain_source_add">Add to brain</string>
+    <string name="brain_source_delete">Remove this source</string>
+    <string name="brain_sources_title">Knowledge sources</string>
 </resources>

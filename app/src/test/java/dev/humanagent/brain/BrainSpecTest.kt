@@ -1,6 +1,7 @@
 package dev.humanagent.brain
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -45,5 +46,50 @@ class BrainSpecTest {
         assertEquals("fact:mum's number", fact.ref)
         // Facts are timeless: no recency boost, and they survive chunk trimming longest.
         assertEquals(0L, fact.ts)
+    }
+
+    @Test
+    fun linksAreDetectedAndPastedTextIsNot() {
+        assertTrue(WebText.isUrl("https://example.com/doc"))
+        assertTrue(WebText.isUrl("  http://example.com  "))
+        assertFalse(WebText.isUrl("just some document text"))
+        assertFalse(WebText.isUrl("ftp://example.com"))
+    }
+
+    @Test
+    fun htmlIsStrippedToReadableText() {
+        val html = """
+            <html><head><title>My Doc</title><script>var x = 1;</script>
+            <style>.a { color: red }</style></head>
+            <body><h1>Hello</h1><p>World &amp; friends&nbsp;— stay.</p></body></html>
+        """.trimIndent()
+        assertEquals("My Doc", WebText.title(html))
+        val text = WebText.strip(html)
+        assertFalse(text.contains("var x"))
+        assertFalse(text.contains("color: red"))
+        assertFalse(text.contains("<"))
+        assertTrue(text.contains("Hello"))
+        assertTrue(text.contains("World & friends"))
+    }
+
+    @Test
+    fun longTextChunksOnParagraphsWithACap() {
+        val paragraphs = (1..20).map { "Paragraph $it " + "x".repeat(200) }
+        val chunks = WebText.chunk(paragraphs.joinToString("\n\n"), chunkSize = 500)
+        assertTrue(chunks.size > 3)
+        // No paragraph is cut mid-way at the soft cap…
+        assertTrue(chunks.all { it.startsWith("Paragraph") })
+        // …and one enormous paragraph still gets split at the hard cap.
+        val huge = WebText.chunk("y".repeat(2500), chunkSize = 500)
+        assertTrue(huge.size >= 2)
+        assertTrue(huge.all { it.length <= 1000 })
+    }
+
+    @Test
+    fun sourceChunksCarryTheirSourceIdAndPart() {
+        val chunk = BrainChunks.source("s1", "My Doc", "https://d", 3, "piece", 5L)
+        assertEquals("source:s1:3", chunk.ref)
+        assertEquals(BrainChunks.KIND_SOURCE, chunk.kind)
+        assertEquals("My Doc", chunk.title)
     }
 }

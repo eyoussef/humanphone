@@ -9,16 +9,16 @@ package dev.humanagent.brain
  */
 object BrainSpec {
 
-    /** The generic CPU/GPU bundle; SoC-optimised variants exist but this one runs everywhere. */
+    /** The generic CPU/GPU bundle the official Universal Embedder sample uses (text + vision). */
     const val MODEL_URL =
-        "https://huggingface.co/litert-community/embeddinggemma-2-text-270m-litert-lm/resolve/main/embeddinggemma-2-text-270m.litertlm"
+        "https://huggingface.co/litert-community/embeddinggemma-2-text-vision-440m-litert-lm/resolve/main/embeddinggemma-2-text-vision-440m.litertlm"
 
     /** LFS object id of the bundle = its SHA-256. */
-    const val MODEL_SHA256 = "2d079ee2f6f066b1f368e8d7c819f55214eaef1d0513b312321901f30ab286fb"
+    const val MODEL_SHA256 = "92dcbea108899e5d6e30d919b0744f90d9967e80c67a4ab5503ac16d54f62eb0"
 
-    const val MODEL_BYTES = 164_626_432L
+    const val MODEL_BYTES = 387_710_976L
 
-    const val MODEL_LABEL = "EmbeddingGemma 2 (text, 270M)"
+    const val MODEL_LABEL = "EmbeddingGemma 2 (text + vision, 440M)"
 
     /** The engine returns 768 dimensions. */
     const val FULL_DIMS = 768
@@ -58,6 +58,7 @@ object BrainChunks {
     const val KIND_CHAT = "chat"
     const val KIND_EPISODE = "episode"
     const val KIND_FACT = "fact"
+    const val KIND_SOURCE = "source"
 
     /** One finished chat exchange — the natural unit the user remembers. */
     fun exchange(conversationId: String, title: String, userText: String, replyText: String, ts: Long): BrainChunk =
@@ -88,4 +89,69 @@ object BrainChunks {
             text = value.trim().take(600),
             ts = 0L, // facts do not age out by recency; they live until deleted
         )
+
+    /** One chunk of a user-added knowledge source (link or document text). */
+    fun source(id: String, title: String, origin: String, part: Int, text: String, ts: Long): BrainChunk =
+        BrainChunk(
+            ref = "source:$id:$part",
+            kind = KIND_SOURCE,
+            title = title.ifBlank { origin.ifBlank { "Source" } },
+            text = text,
+            ts = ts,
+        )
+}
+
+/** Turning a fetched page or pasted document into plain text and index-sized chunks. Pure. */
+object WebText {
+
+    private val URL = Regex("^https?://\\S+$", RegexOption.IGNORE_CASE)
+
+    fun isUrl(input: String): Boolean = URL.matches(input.trim())
+
+    /** Rough HTML → text: drop scripts/styles, collapse tags to spaces, decode the common entities. */
+    fun strip(html: String): String {
+        val body = html
+            .replace(Regex("(?is)<(script|style)[^>]*>.*?</(script|style)>"), " ")
+            .replace(Regex("(?s)<[^>]+>"), " ")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+        return body.replace(Regex("[ \\t\\x0B\\f\\r]+"), " ")
+            .replace(Regex(" *\\n *"), "\n")
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
+    }
+
+    /** The page's <title>, or empty. */
+    fun title(html: String): String =
+        Regex("(?is)<title[^>]*>(.*?)</title>").find(html)?.groupValues?.get(1)
+            ?.let { strip(it).replace('\n', ' ').trim() }
+            .orEmpty()
+            .take(120)
+
+    /** Splits text into chunks of about [chunkSize] characters on paragraph boundaries. */
+    fun chunk(text: String, chunkSize: Int = 1_200): List<String> {
+        val pieces = mutableListOf<String>()
+        val current = StringBuilder()
+        for (paragraph in text.split('\n')) {
+            val line = paragraph.trim()
+            if (line.isEmpty()) continue
+            if (current.isNotEmpty() && current.length + line.length + 1 > chunkSize) {
+                pieces.add(current.toString())
+                current.clear()
+            }
+            if (current.isNotEmpty()) current.append(' ')
+            current.append(line)
+            // A single huge paragraph breaks at the cap so chunks stay retrievable.
+            while (current.length > chunkSize * 2) {
+                pieces.add(current.substring(0, chunkSize))
+                current.delete(0, chunkSize)
+            }
+        }
+        if (current.isNotBlank()) pieces.add(current.toString())
+        return pieces
+    }
 }

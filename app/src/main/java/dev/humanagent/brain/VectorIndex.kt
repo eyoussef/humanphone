@@ -60,6 +60,11 @@ class VectorIndex(private val file: File) {
         open().delete("chunks", "ref = ?", arrayOf(ref))
     }
 
+    /** Removes every chunk whose ref starts with [prefix] (a source's parts). */
+    fun deleteByRefPrefix(prefix: String) {
+        open().delete("chunks", "ref LIKE ? ESCAPE '\\'", arrayOf(prefix.replace("%", "\\%").replace("_", "\\_") + "%"))
+    }
+
     fun count(): Int {
         open().rawQuery("SELECT COUNT(*) FROM chunks", null).use { cursor ->
             return if (cursor.moveToFirst()) cursor.getInt(0) else 0
