@@ -1,0 +1,8 @@
+Fixes "Field platform_ ... not found" when setting up the brain.
+
+R8 renamed and stripped protobuf fields that the MediaPipe engine reads
+by exact name from native code, so the model downloaded fine but engine
+creation failed. The engine's message classes keep their names now.
+
+The model stays a separate download from Settings - it is never part of
+the app install.
